@@ -1,11 +1,14 @@
-from datasets import load_dataset, load_metric
-from transformers import DistilBertTokenizer
+from datasets import load_dataset
+from pathlib import Path
+import numpy as np
+from transformers import DistilBertTokenizer,DistilBertModel
 from transformers import DistilBertForSequenceClassification, Trainer, TrainingArguments
-dataset = load_dataset('json', data_files='../train/datasets_entity_judge.json')
+DATA_FILE = str((Path(__file__).resolve().parent / 'datasets_entity_judge.json'))
+dataset = load_dataset('json', data_files=DATA_FILE)
 dataset = dataset['train'].train_test_split(test_size=0.2)
 
 print(dataset)
-PATH = '../model/distilbert-base-cased'
+PATH = r'D:\WorkSpace\haitianbei\model\distilbert-base-cased'
 DEVICE = "cuda:0"
 tokenizer = DistilBertTokenizer.from_pretrained(PATH)
 
@@ -14,12 +17,16 @@ def preprocess_function(examples):
     return tokenizer(examples['question'], examples['entity'], truncation=True, padding='max_length')
 
 encoded_dataset = dataset.map(preprocess_function, batched=True)
+# ensure the classification target column is named 'labels' for Trainer compatibility
+if 'label' in encoded_dataset['train'].column_names:
+    encoded_dataset = encoded_dataset.rename_column('label', 'labels')
 model = DistilBertForSequenceClassification.from_pretrained(PATH, num_labels=2).to(DEVICE)
-accuracy_metric = load_metric("accuracy")
+
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
-    predictions = logits.argmax(axis=-1)
-    return accuracy_metric.compute(predictions=predictions, references=labels)
+    predictions = np.argmax(logits, axis=-1)
+    acc = (predictions == labels).astype(np.float32).mean().item()
+    return {"accuracy": acc}
 
 
 # train arguments
