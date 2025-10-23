@@ -32,7 +32,7 @@ def compute_metrics(eval_pred):
 # train arguments
 training_args = TrainingArguments(
     output_dir='./results_entity_judge',
-    evaluation_strategy='epoch',  # 在每个epoch结束时评估模型
+    eval_strategy='epoch',  # 在每个epoch结束时评估模型
     learning_rate=2e-5,
     save_strategy='epoch',  # 在每个epoch结束时保存模型
     per_device_train_batch_size=16,
