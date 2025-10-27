@@ -177,6 +177,7 @@ def main():
     parser.add_argument(
         "--visualize_clean",
         action="store_true",
+        default=True,
         help="在开始构建前清空快照目录中的旧 PNG 文件",
     )
     parser.add_argument(

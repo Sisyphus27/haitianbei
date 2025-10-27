@@ -7,6 +7,13 @@ Description:
 FilePath: haitianbei/exp/exp_main.py
 
 '''
+# 兼容直接"运行本文件"的调试方式：确保项目根目录在 sys.path
+# 这样即使用 "python exp/exp_main.py" 启动，也能导入顶层包（exp、utils、data_provider）。
+import os as _os
+import sys as _sys
+if __package__ is None or __package__ == "":
+    _sys.path.insert(0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..")))
+
 from exp.exp_basic import Exp_Basic
 from utils.origindata_preprocessing import convert_csv_to_jsonl
 from utils.batch_extract_triples import run as run_extract

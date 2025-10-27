@@ -120,9 +120,27 @@ def extract_triples(text: str) -> List[Triple]:
 	if mc:
 		coord = f"({mc.group(1)},{mc.group(2)})"
 
-	# 6) 速度
-	ms = re.search(r"速度\s*([0-9]+(?:\.[0-9]+)?)\s*米/秒", text)
+	# 6) 速度（全局匹配，稍后按上下文决定归属）
+	ms = re.search(r"(?:滑行)?速度\s*([0-9]+(?:\.[0-9]+)?)\s*米/秒", text)
 	speed = f"{ms.group(1)}米/秒" if ms else None
+
+	# 6.1) 牵引相关模式：牵引车牵引飞机 -> 飞机/牵引车 滑至 停机位
+	# 示例：5号牵引车开始牵引飞机A001滑行至14号停机位
+	tug_trip_found = False
+	for tug_no, ac_id, gate_no in re.findall(r"(\d+号牵引车).*?牵引.*?飞机([A-Za-z0-9]+).*?(?:滑行至|滑至)\s*(\d+)号停机位", text):
+		_add(triples, seen, (tug_no, "牵引", f"飞机{ac_id}"))
+		_add(triples, seen, (tug_no, "滑至", f"{gate_no}号停机位"))
+		_add(triples, seen, (f"飞机{ac_id}", "滑至", f"{gate_no}号停机位"))
+		tug_trip_found = True
+
+	# 6.2) 若有“牵引车…速度X米/秒”或“滑行速度X米/秒”，把速度赋给牵引车与句中出现的具体飞机ID
+	if speed:
+		m_tug_speed = re.search(r"(\d+号牵引车).*?(?:滑行速度|速度)\s*[0-9]+(?:\.[0-9]+)?\s*米/秒", text)
+		if m_tug_speed:
+			_add(triples, seen, (m_tug_speed.group(1), "速度", speed))
+			# 同步给出现的具体飞机ID（若文本中有多架，全部赋值）
+			for ac in aircraft_ids:
+				_add(triples, seen, (ac, "速度", speed))
 
 	# 7) 牵引车待命位置
 	# 例：系统检测到5号牵引车待命于着陆跑道Z / 着陆跑道
@@ -144,9 +162,14 @@ def extract_triples(text: str) -> List[Triple]:
 			_add(triples, seen, (ac, "时间", norm_time))
 
 		# 动作（按首次命中的关键词）
-		# 多动作可能并存，这里允许同一句为同一飞机记录多个动作（去重由 seen 控制）
+		# 多动作可能并存。若句子中存在牵引车牵引该飞机或存在“滑(行)?至”指向停机位，则抑制把“牵引/滑行”作为飞机的动作，避免歧义。
+		same_clause_to_gate = bool(re.search(fr"{re.escape(ac)}[^。；;]*?(?:滑行至|滑至)\s*\d+号停机位", text))
+		has_tug_context = bool(re.search(r"\d+号牵引车.*?牵引.*?" + re.escape(ac), text))
 		for pat, pred, obj in action_map:
 			if re.search(pat, text):
+				if obj in {"牵引", "滑行"} and (same_clause_to_gate or has_tug_context):
+					# 抑制 (飞机, 动作, 牵引/滑行)
+					continue
 				_add(triples, seen, (ac, pred, obj))
 
 		# 跑道
@@ -157,17 +180,17 @@ def extract_triples(text: str) -> List[Triple]:
 		if coord:
 			_add(triples, seen, (ac, "坐标", coord))
 
-		# 速度
-		if speed:
+		# 速度：若非牵引语境，也给该飞机绑定速度
+		if speed and not re.search(r"\d+号牵引车.*?(?:滑行速度|速度)\s*[0-9]+(?:\.[0-9]+)?\s*米/秒", text):
 			_add(triples, seen, (ac, "速度", speed))
 
 		# 到达/目标停机位（仅当该飞机名与模式在同一子句内时）
 		m_arr = re.search(fr"{re.escape(ac)}[^。；；]*?到达(\d+)号停机位", text)
 		if m_arr:
 			_add(triples, seen, (ac, "到达停机位", f"{m_arr.group(1)}号"))
-		m_to = re.search(fr"{re.escape(ac)}[^。；；]*?滑行至(\d+)号停机位", text)
+		m_to = re.search(fr"{re.escape(ac)}[^。；;]*?(?:滑行至|滑至)\s*(\d+)号停机位", text)
 		if m_to:
-			_add(triples, seen, (ac, "目标停机位", f"{m_to.group(1)}号"))
+			_add(triples, seen, (ac, "滑至", f"{m_to.group(1)}号停机位"))
 
 		# 启动类动作中常见关键词单独兜底（当句子出现“启动X”但前面正则未命中时生效）
 		start_keywords = [
