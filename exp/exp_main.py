@@ -15,10 +15,6 @@ if __package__ is None or __package__ == "":
     _sys.path.insert(0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..")))
 
 from exp.exp_basic import Exp_Basic
-# 流式改造：按行生成文本 -> 立即抽取三元组 -> 立刻更新 KG
-# 复用预处理与规范化的内部工具函数
-from utils.origindata_preprocessing import _read_csv_any_encoding as _read_csv_any, _merge_row_cells as _merge_cells
-from utils.pack_training_json import normalize_text_punct as _norm_text
 from models.triples_extraction import extract_triples as _extract_triples
 from data_provider.data_loader import Dataset_KG
 from data_provider.data_loader import load_instruction_jsonl, build_rules_sft_samples_from_md
@@ -65,25 +61,6 @@ class Exp_main(Exp_Basic):
         super(Exp_main, self).__init__(args)
         # 根路径
         self.root = getattr(args, 'root', os.getcwd())
-        # 输入 CSV（原始数据）
-        self.input_csv = getattr(args, 'input_csv', os.path.join(self.root, 'data_provider', '海天杯-ST_Job_训练集.csv'))
-        # 中间与输出
-        self.out_dir = getattr(args, 'out_dir', os.path.join(self.root, 'data_provider'))
-        # 以下产物路径在步骤完成后再赋值（初始为 None）
-        self.texts_jsonl = None
-        self.triples_jsonl = None
-        self.train_jsonl = None
-        self.ttl_out = None
-        self.png_out = None
-        # 限制用于构建 KG 的记录数（可选，便于快速调试）
-        self.limit_kg = getattr(args, 'limit_kg', None)
-        # 可视化开关与参数
-        # 每多少条记录导出一次快照（0 表示不导出）
-        self.visualize_every = int(getattr(args, 'visualize_every', 0) or 0)
-        self.visualize_dir = getattr(args, 'visualize_dir', os.path.join(self.root, 'output', 'kg_steps'))
-        self.visualize_max_edges = getattr(args, 'visualize_max_edges', 300)
-        self.visualize_limit = getattr(args, 'visualize_limit', 50)  # 最多导出多少张快照，避免过多文件
-        self.visualize_clean = bool(getattr(args, 'visualize_clean', False))
         # Neo4j 连接参数
         self.neo4j_uri = getattr(args, 'neo4j_uri', None)
         self.neo4j_user = getattr(args, 'neo4j_user', None)
@@ -91,7 +68,7 @@ class Exp_main(Exp_Basic):
         self.neo4j_database = getattr(args, 'neo4j_database', None)
         # 离线模式：跳过 KG 构建
         self.skip_kg = getattr(args, 'skip_kg', False)
-        # 是否在构建前重置 KG（保留固定节点）
+        # 是否在构建前重置 KG（保留固定节点）（流推理中通常不需要）
         self.reset_kg = bool(getattr(args, 'reset_kg', False))
         # 基座模型目录（Qwen3-4B）
         self.base_model_dir = getattr(args, 'base_model_dir', os.path.join(self.root, 'models', 'Qwen3-4B'))
@@ -109,171 +86,71 @@ class Exp_main(Exp_Basic):
                     return self
             return DummyModel(), []
 
-    # 读取 JSONL 行迭代器
-    def _iter_jsonl(self, path: str):
-        with open(path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                yield json.loads(line)
-
     def run(self):
-        """流式处理：逐条读取原始 CSV 的一行，立即抽取三元组并增量更新 KG，同时持续写出 JSONL 产物。"""
-        # 产物路径
-        self.texts_jsonl = getattr(self.args, 'texts_jsonl', None) or os.path.join(self.out_dir, 'train_texts.jsonl')
-        self.triples_jsonl = getattr(self.args, 'triples_jsonl', None) or os.path.join(self.out_dir, 'train_triples.jsonl')
-        self.train_jsonl = getattr(self.args, 'train_jsonl', None) or os.path.join(self.out_dir, 'train_for_model.jsonl')
-        os.makedirs(os.path.dirname(self.texts_jsonl), exist_ok=True)
+        """统一入口：根据 mode 执行 LoRA 训练或事件流冲突判定。"""
+        mode = getattr(self.args, 'mode', 'stream-judge')
 
-        # 初始化（可选）KG
-        kg = None
-        if not self.skip_kg:
-            kg = Dataset_KG(
-                self.root, load_data=False,
-                neo4j_uri=self.neo4j_uri,
-                neo4j_user=self.neo4j_user,
-                neo4j_password=self.neo4j_password,
-                neo4j_database=self.neo4j_database,
+        if mode == 'train':
+            # 读取训练超参
+            fp16 = not bool(getattr(self.args, 'no_fp16', False))
+            info = self.train_rules_lora(
+                train_jsonl=getattr(self.args, 'train_jsonl', None),
+                rules_md_path=getattr(self.args, 'rules_md_path', None),
+                output_dir=getattr(self.args, 'lora_out_dir', self.lora_out_dir),
+                num_train_epochs=int(getattr(self.args, 'num_train_epochs', 1)),
+                learning_rate=float(getattr(self.args, 'learning_rate', 2e-5)),
+                per_device_train_batch_size=int(getattr(self.args, 'per_device_train_batch_size', 1)),
+                use_4bit=bool(getattr(self.args, 'use_4bit', False)),
+                fp16=fp16,
+                augment_train_with_kg=not bool(getattr(self.args, 'no_augment_train_with_kg', False)),
+                gradient_accumulation_steps=int(getattr(self.args, 'grad_accum_steps', 1)),
+                max_seq_len=int(getattr(self.args, 'max_seq_len', 1024)),
+                prefer_device=str(getattr(self.args, 'device', 'auto')),
+                log_steps=int(getattr(self.args, 'log_steps', 1)),
             )
-            if self.reset_kg:
-                try:
-                    kg.reset_graph(keep_fixed=True)
-                    print("[KG] 已重置：保留固定节点")
-                except Exception as _e:
-                    print("[KG] 重置失败，继续：", _e)
+            print("\n=== Train Finished ===")
+            print("adapter_dir :", info.get("adapter_dir"))
+            print("samples     :", info.get("samples"))
+            return info
 
-        # 可视化初始化
-        used = 0
-        snap_count = 0
-        snapshot_disabled = False
-        print(f"[VIS] every={self.visualize_every}, limit={self.visualize_limit}, max_edges={self.visualize_max_edges}, dir={self.visualize_dir}")
-        if self.visualize_every > 0 and kg is not None:
-            os.makedirs(self.visualize_dir, exist_ok=True)
-            if self.visualize_clean:
-                try:
-                    import glob
-                    for fp in glob.glob(os.path.join(self.visualize_dir, '*.png')):
-                        try:
-                            os.remove(fp)
-                        except Exception:
-                            pass
-                    print(f"[VIS] 已清理旧快照: {self.visualize_dir}")
-                except Exception:
-                    pass
-
-        # 打开 3 个产物文件，边处理边写入
-        texts_f = open(self.texts_jsonl, 'w', encoding='utf-8')
-        triples_f = open(self.triples_jsonl, 'w', encoding='utf-8')
-        train_f = open(self.train_jsonl, 'w', encoding='utf-8')
-        total_texts = 0
-        total_triples_lines = 0
-        try:
-            # 读取原始 CSV 到 DataFrame，再逐行合并文本（与原预处理逻辑一致）
-            df = _read_csv_any(self.input_csv)
-            for row_idx, row in df.iterrows():
-                cells = [str(v) if getattr(v, 'strip', None) is None else v for v in row.tolist()]
-                # 统一转 str 并 strip
-                cells = [str(v) if v is not None else '' for v in cells]
-                text = _merge_cells(cells)
-                if not text:
-                    continue
-
-                rec_id = int(total_texts)
-
-                # 1) 写出文本行
-                texts_f.write(json.dumps({"id": rec_id, "text": text}, ensure_ascii=False) + "\n")
-                total_texts += 1
-
-                # 2) 抽取三元组并（可选）更新 KG
-                if kg is not None:
-                    triples = kg.extract_and_update(text)
-                else:
-                    triples = _extract_triples(text)
-
-                # JSON 可序列化
-                triples_as_list = [[s, p, o] for (s, p, o) in triples]
-                triples_obj = {"id": rec_id, "text": text, "triples": triples_as_list}
-                triples_f.write(json.dumps(triples_obj, ensure_ascii=False) + "\n")
-                total_triples_lines += 1
-
-                # 3) 同步写出训练 JSON 行
-                train_obj = {
-                    "id": rec_id,
-                    "text": text,
-                    "text_norm": _norm_text(text),
-                    "triples": triples_as_list,
-                }
-                train_f.write(json.dumps(train_obj, ensure_ascii=False) + "\n")
-
-                used += 1
-
-                # 4) 动态可视化快照
-                if kg is not None and self.visualize_every > 0 and not snapshot_disabled:
-                    if (used % self.visualize_every == 0) and (snap_count < int(self.visualize_limit)):
-                        step_png = os.path.join(self.visualize_dir, f"step_{used:05d}.png")
-                        ret = kg.export_png(step_png, max_edges=int(self.visualize_max_edges))
-                        snap_count += 1
-                        if isinstance(ret, dict) and 'error' in ret:
-                            print(f"[VIS] 快照失败 {snap_count}/{self.visualize_limit}: {step_png} -> {ret['error']}")
-                            snapshot_disabled = True
-                        else:
-                            try:
-                                size = int(ret.get('size', 0)) if isinstance(ret, dict) else (os.path.getsize(step_png) if os.path.exists(step_png) else 0)
-                            except Exception:
-                                size = 0
-                            print(f"[VIS] 快照 {snap_count}/{self.visualize_limit}: {step_png} (size={size} bytes)")
-
-                # 5) 提前终止（调试/限量）
-                if self.limit_kg is not None and isinstance(self.limit_kg, int) and used >= self.limit_kg:
-                    break
-        finally:
-            try:
-                texts_f.close()
-            except Exception:
-                pass
-            try:
-                triples_f.close()
-            except Exception:
-                pass
-            try:
-                train_f.close()
-            except Exception:
-                pass
-
-        # 构建结果快照与导出
-        if kg is None:
-            snap = {'nodes_count': 0, 'edges_count': 0}
-            self.ttl_out = None
-            self.png_out = None
-            print(f"[DONE] 离线抽取完成: 文本={total_texts} 行, 三元组记录={total_triples_lines} 行（未构建 KG）")
-        else:
-            snap = kg.graph_snapshot()
-            print(f"[DONE] 流式构建完成: 已处理={used} 行 -> 节点={snap['nodes_count']}, 边={snap['edges_count']}")
-
-            # 导出 TTL（说明文件）
-            ttl_out_path = getattr(self.args, 'ttl_out', None) or os.path.join(self.root, 'output', 'kg.ttl')
-            kg.export_ttl(ttl_out_path)
-            self.ttl_out = ttl_out_path
-            print(f"[OUT] TTL: {self.ttl_out}")
-
-            # 导出最终 PNG
-            png_out_path = getattr(self.args, 'png_out', None) or os.path.join(self.root, 'resoterd', 'output', 'kg.png')
-            final_ret = kg.export_png(png_out_path)
-            self.png_out = png_out_path
-            if isinstance(final_ret, dict) and 'error' in final_ret:
-                print(f"[OUT] PNG 导出失败: {final_ret['error']}")
+        # 默认：stream-judge
+        events_file = getattr(self.args, 'events_file', None)
+        # 若未显式提供，尝试回退到 tests/events_sample.txt
+        if not events_file or not os.path.isfile(events_file):
+            _default_ev = os.path.join(self.root, 'tests', 'events_sample.txt')
+            if os.path.isfile(_default_ev):
+                print(f"[stream-judge] 未提供 --events_file，使用默认样例: {_default_ev}")
+                events_file = _default_ev
             else:
-                print(f"[OUT] PNG: {self.png_out}")
+                print("[stream-judge] 需要 --events_file (每行一条事件)。示例:")
+                print("  python run.py --mode stream-judge --events_file tests/events_sample.txt --rules_md_path tests/rules_sample.md")
+                return {"error": "missing_events_file"}
+        with open(events_file, 'r', encoding='utf-8') as f:
+            events = [ln.strip() for ln in f if ln.strip()]
+        focus = [s.strip() for s in str(getattr(self.args, 'focus_entities', '') or '').split(',') if s.strip()]
+        rules_md_path = getattr(self.args, 'rules_md_path', None)
+        lora_adapter_dir = getattr(self.args, 'lora_adapter_dir', None)
+        use_vllm = not bool(getattr(self.args, 'no_vllm', False))
+        batch_size = max(1, int(getattr(self.args, 'batch_size', 4)))
+        simple_output = bool(getattr(self.args, 'simple_output', False))
 
-        return {
-            'texts_jsonl': self.texts_jsonl,
-            'triples_jsonl': self.triples_jsonl,
-            'train_jsonl': self.train_jsonl,
-            'ttl_out': self.ttl_out,
-            'png_out': self.png_out,
-            'kg_snapshot': snap,
-        }
+        print("\n=== Stream Judge Start ===")
+        count = 0
+        for ev, out in self.stream_judge_conflicts(
+            events_iter=events,
+            focus_entities=(focus or None),
+            rules_md_path=rules_md_path,
+            lora_adapter_dir=lora_adapter_dir,
+            use_vllm=use_vllm,
+            batch_size=batch_size,
+            simple_output=simple_output,
+        ):
+            count += 1
+            print(f"[#{count}] 事件: {ev}")
+            print(out)
+            print("-" * 60)
+        print("=== Stream Judge End ===")
+        return {"count": count}
 
     # ----------------------------
     # 规则学习与冲突判断（训练/推理）
@@ -686,85 +563,7 @@ class Exp_main(Exp_Basic):
                 texts.append("")
         return texts
 
-    def judge_conflict(self, event_text: str, focus_entities: Optional[List[str]] = None,
-                        rules_md_path: Optional[str] = None,
-                        lora_adapter_dir: Optional[str] = None,
-                        use_vllm: bool = True,
-                        simple_output: bool = False) -> dict:
-        """基于规则与 KG 状态，判断新事件是否存在冲突。
-
-        返回：{"prompt": str, "output": str}
-        """
-        rules_text = self.build_rules_prompt(rules_md_path) if rules_md_path else ""
-
-        kg = None
-        if not self.skip_kg:
-            kg = Dataset_KG(
-                self.root, load_data=False,
-                neo4j_uri=self.neo4j_uri,
-                neo4j_user=self.neo4j_user,
-                neo4j_password=self.neo4j_password,
-                neo4j_database=self.neo4j_database,
-            )
-        kg_text = self._kg_text_context(kg, focus_entities) if (kg is not None) else "【KG状态】\n(离线模式，未加载图谱)"
-        prompt = self._format_conflict_prompt_with_mode(event_text, rules_text, kg_text, simple=simple_output)
-
-        if use_vllm:
-            out = self.generate_with_vllm([prompt], lora_adapter_dir=lora_adapter_dir)[0]
-        else:
-            # 退化到 transformers 直接推理
-            if transformers is None:
-                raise RuntimeError("需要安装 transformers 或 vllm 进行推理")
-            from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
-            tok = AutoTokenizer.from_pretrained(self.base_model_dir, trust_remote_code=True, use_fast=False)
-            if tok.pad_token is None:
-                tok.pad_token = tok.eos_token
-            mdl = AutoModelForCausalLM.from_pretrained(self.base_model_dir, trust_remote_code=True)
-            # 推断并统一到单一设备（简化 device_map 带来的分片问题）
-            try:
-                import torch  # type: ignore
-                device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
-            except Exception:
-                device_str = 'cpu'
-            # 将模型放到单一设备，避免自动分片导致的输入/模型设备不一致
-            try:
-                if device_str == 'cuda':
-                    mdl = getattr(mdl.__class__, 'cuda')(mdl)
-                else:
-                    mdl = getattr(mdl.__class__, 'cpu')(mdl)
-            except Exception:
-                pass
-            # 加载 LoRA 适配器（若提供）
-            if lora_adapter_dir:
-                try:
-                    from peft import PeftModel  # type: ignore
-                    mdl = PeftModel.from_pretrained(mdl, lora_adapter_dir)
-                    # 再次确保设备一致
-                    try:
-                        if device_str == 'cuda':
-                            mdl = getattr(mdl.__class__, 'cuda')(mdl)
-                        else:
-                            mdl = getattr(mdl.__class__, 'cpu')(mdl)
-                    except Exception:
-                        pass
-                except Exception as _e:
-                    print("[infer] 加载 LoRA 适配器失败，改用基座模型：", _e)
-            ids = tok(prompt, return_tensors='pt')
-            # 将输入张量迁移到与模型一致的设备
-            try:
-                moved = {}
-                for k, v in ids.items():
-                    if device_str == 'cuda':
-                        moved[k] = getattr(v.__class__, 'cuda')(v)
-                    else:
-                        moved[k] = getattr(v.__class__, 'cpu')(v)
-                ids = moved
-            except Exception:
-                pass
-            gen = mdl.generate(**ids, max_new_tokens=256, do_sample=False)
-            out = tok.decode(gen[0][ids['input_ids'].shape[1]:], skip_special_tokens=True)
-
-        return {"prompt": prompt, "output": out}
+    # 删除单条 judge 接口，统一通过 stream_judge_conflicts/Exp_main.run 路由
 
     def stream_judge_conflicts(self,
                                events_iter,
@@ -862,6 +661,17 @@ class Exp_main(Exp_Basic):
                         gen = mdl.generate(**ids, max_new_tokens=256, do_sample=False)
                         out = tok.decode(gen[0][ids['input_ids'].shape[1]:], skip_special_tokens=True)
                         outs.append(out)
+                # 若 simple_output，仅保留首个“合规/冲突”标签
+                if simple_output:
+                    def _to_label(t: str) -> str:
+                        if not isinstance(t, str):
+                            return ""
+                        if "合规" in t:
+                            return "合规"
+                        if "冲突" in t:
+                            return "冲突"
+                        return t.strip().splitlines()[0] if t.strip() else ""
+                    outs = [_to_label(o) for o in outs]
                 # 逐条回传，并在判定后更新 KG（流式推进）
                 if kg is not None:
                     for e in batch_events:
@@ -926,6 +736,17 @@ class Exp_main(Exp_Basic):
                     gen = mdl.generate(**ids, max_new_tokens=256, do_sample=False)
                     out = tok.decode(gen[0][ids['input_ids'].shape[1]:], skip_special_tokens=True)
                     outs.append(out)
+            # 若 simple_output，仅保留首个“合规/冲突”标签
+            if simple_output:
+                def _to_label(t: str) -> str:
+                    if not isinstance(t, str):
+                        return ""
+                    if "合规" in t:
+                        return "合规"
+                    if "冲突" in t:
+                        return "冲突"
+                    return t.strip().splitlines()[0] if t.strip() else ""
+                outs = [_to_label(o) for o in outs]
             if kg is not None:
                 for e in batch_events:
                     try:
