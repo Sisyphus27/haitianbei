@@ -123,7 +123,7 @@ class Exp_main(Exp_Basic):
                 events_file = _default_ev
             else:
                 print("[stream-judge] 需要 --events_file (每行一条事件)。示例:")
-                print("  python run.py --mode stream-judge --events_file tests/events_sample.txt --rules_md_path tests/rules_sample.md")
+                print("  python run.py --mode stream-judge --events_file tests/events_sample.txt --rules_md_path tests/rules_sample.txt")
                 return {"error": "missing_events_file"}
         with open(events_file, 'r', encoding='utf-8') as f:
             events = [ln.strip() for ln in f if ln.strip()]
@@ -400,7 +400,7 @@ class Exp_main(Exp_Basic):
             trust_remote_code=True,
             device_map=_device_map,
             quantization_config=quant_config,
-            torch_dtype=_torch_dtype,
+            dtype=_torch_dtype,
         )
 
         lora_cfg = LoraConfig(
@@ -602,16 +602,43 @@ class Exp_main(Exp_Basic):
                 continue
             ev = ev.strip()
             # 针对每条事件，使用“当前”KG状态生成 prompt（先判后更）
-            kg_text = self._kg_text_context(kg, focus_entities) if (kg is not None) else "【KG状态】\n(离线模式，未加载图谱)"
+            # 仅关注“当前事件文本”中出现的实体：从抽取的三元组(subject/object)收集实体作为查询焦点。
+            # 注意：不再合并全局 --focus_entities，严格限定上下文查询范围到本事件。
+            auto_focus: List[str] = []
+            try:
+                trips = _extract_triples(ev)
+                for s, p, o in trips:
+                    for t in (s, o):
+                        t = str(t).strip()
+                        if t:
+                            auto_focus.append(t)
+            except Exception:
+                pass
+            # 去重：仅使用当前文本实体
+            if auto_focus:
+                seen = set()
+                cur_focus = []
+                for x in auto_focus:
+                    if x and x not in seen:
+                        cur_focus.append(x)
+                        seen.add(x)
+            else:
+                cur_focus = None
+            kg_text = self._kg_text_context(kg, focus_entities=cur_focus) if (kg is not None) else "【KG状态】\n(离线模式，未加载图谱)"
             prompt = self._format_conflict_prompt_with_mode(ev, rules_text, kg_text, simple=simple_output)
             batch_events.append(ev)
             batch_prompts.append(prompt)
 
             if len(batch_events) >= max(1, int(batch_size)):
                 # 推理
+                outs = None
                 if use_vllm:
-                    outs = self.generate_with_vllm(batch_prompts, lora_adapter_dir=lora_adapter_dir)
-                else:
+                    try:
+                        outs = self.generate_with_vllm(batch_prompts, lora_adapter_dir=lora_adapter_dir)
+                    except Exception as e:  # noqa: BLE001
+                        print("[vLLM] 推理不可用或失败，自动回退到 transformers：", e)
+                        outs = None
+                if outs is None:
                     if transformers is None:
                         raise RuntimeError("需要安装 transformers 或 vllm 进行推理")
                     from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
@@ -685,9 +712,14 @@ class Exp_main(Exp_Basic):
 
         # 处理尾批
         if batch_events:
+            outs = None
             if use_vllm:
-                outs = self.generate_with_vllm(batch_prompts, lora_adapter_dir=lora_adapter_dir)
-            else:
+                try:
+                    outs = self.generate_with_vllm(batch_prompts, lora_adapter_dir=lora_adapter_dir)
+                except Exception as e:  # noqa: BLE001
+                    print("[vLLM] 推理不可用或失败，自动回退到 transformers：", e)
+                    outs = None
+            if outs is None:
                 if transformers is None:
                     raise RuntimeError("需要安装 transformers 或 vllm 进行推理")
                 from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
