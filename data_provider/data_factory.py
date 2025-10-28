@@ -4,7 +4,7 @@ Date: 2025-10-22 20:05:06
 LastEditTime: 2025-10-22 20:06:31
 LastEditors: zy
 Description:
-FilePath: \haitianbei\data_provider\data_factory.py
+FilePath: /haitianbei/data_provider/data_factory.py
 
 """
 

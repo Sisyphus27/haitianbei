@@ -10,6 +10,7 @@ FilePath: haitianbei/data_provider/data_loader.py
 
 import os
 import re
+import json
 from urllib.parse import quote
 
 import numpy as np
@@ -96,26 +97,51 @@ class Dataset_KG(Dataset):
         # rel: 使用关系，prop: 使用节点属性
         self.PREDICATE_MAP = {
             "使用跑道": {"type": "rel", "rel": "USES_RUNWAY"},
+            # 同义：着陆跑道 视为 使用跑道
+            "着陆跑道": {"type": "rel", "rel": "USES_RUNWAY"},
             "分配停机位": {"type": "rel", "rel": "ASSIGNED_GATE"},
             "到达停机位": {"type": "rel", "rel": "ARRIVED_GATE"},
             "目标停机位": {"type": "rel", "rel": "TARGET_GATE"},
+            # 同义：滑至 -> 目标停机位（业务上表达为移动到目标位）
+            "滑至": {"type": "rel", "rel": "TARGET_GATE"},
             "待命位置": {"type": "rel", "rel": "STANDBY_AT"},
             "当前停机位": {"type": "rel", "rel": "HAS_CURRENT_GATE"},
-            "动作": {"type": "prop", "prop": "action"},
-            "时间": {"type": "prop", "prop": "time"},
-            "坐标": {"type": "prop", "prop": "coordinate"},
-            "速度": {"type": "prop", "prop": "speed"},
+            # 设备-飞机 牵引关系
+            "牵引": {"type": "rel", "rel": "TOWS"},
+            # 以下为属性型谓词，同时补充“值节点关系”，便于在图中直观看到与主体的连接
+            # 在写入时会：1) 将值写入主体属性；2) MERGE 值节点(label 见 val_label，name 为文本)；3) 创建 HAS_* 关系
+            "动作": {"type": "prop", "prop": "action", "rel": "HAS_ACTION", "val_label": "Action"},
+            "时间": {"type": "prop", "prop": "time", "rel": "HAS_TIME", "val_label": "Time"},
+            "坐标": {"type": "prop", "prop": "coordinate", "rel": "HAS_COORDINATE", "val_label": "Coordinate"},
+            "速度": {"type": "prop", "prop": "speed", "rel": "HAS_SPEED", "val_label": "Speed"},
             "固定不动": {"type": "prop", "prop": "isFixed"},
         }
 
         # 关系类型到中文名（用于可视化/查询展示）
         self.REL_TO_CN = {
             "USES_RUNWAY": "使用跑道",
+            # 同义谓词（着陆跑道）也映射到相同中文，展示一致
             "ASSIGNED_GATE": "分配停机位",
             "ARRIVED_GATE": "到达停机位",
             "TARGET_GATE": "目标停机位",
             "STANDBY_AT": "待命位置",
             "HAS_CURRENT_GATE": "当前停机位",
+            "TOWS": "牵引",
+            # 值节点关系（用于可视化/查询展示）
+            "HAS_ACTION": "动作",
+            "HAS_TIME": "时间",
+            "HAS_COORDINATE": "坐标",
+            "HAS_SPEED": "速度",
+        }
+
+        # 指定哪些关系在业务上是“单值”的：同一主体该关系同时最多指向一个客体
+        # 避免出现冲突（重复/多值）时越积越多，这些关系在插入新三元组时会自动清理旧客体关系
+        self.SINGLE_VALUED_RELS: set[str] = {
+            "USES_RUNWAY",        # 使用跑道（通常一次只使用一个跑道）
+            "ASSIGNED_GATE",      # 分配停机位（分配应唯一）
+            "TARGET_GATE",        # 目标停机位（目标应唯一）
+            "STANDBY_AT",         # 待命位置（唯一）
+            "HAS_CURRENT_GATE",   # 当前停机位（唯一，已在到达时同步维护）
         }
 
     def _init_static_graph(self):
@@ -125,18 +151,18 @@ class Dataset_KG(Dataset):
             for i in range(1, 29):
                 name = f"停机位{i}"
                 sess.run(
-                    f"MERGE (n:{self.Gate} {{name:$name}}) SET n.isFixed = true",
+                    f"MERGE (n:{self.Gate} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
                     {"name": name},
                 )
             # 跑道 Z
             sess.run(
-                f"MERGE (n:{self.Runway} {{name:$name}}) SET n.isFixed = true",
+                f"MERGE (n:{self.Runway} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
                 {"name": "跑道Z"},
             )
             # 跑道 29/30/31
             for r in (29, 30, 31):
                 sess.run(
-                    f"MERGE (n:{self.Runway} {{name:$name}}) SET n.isFixed = true",
+                    f"MERGE (n:{self.Runway} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
                     {"name": f"跑道{r}"},
                 )
 
@@ -155,7 +181,7 @@ class Dataset_KG(Dataset):
         if label is None:
             label = self._class_for_entity(name) or "Entity"
         with self.driver.session(database=self.neo4j_database) as sess:
-            sess.run(f"MERGE (n:{label} {{name:$name}})", {"name": name})
+            sess.run(f"MERGE (n:{label} {{name:$name}})", {"name": name})  # type: ignore[arg-type]
         return name
 
     def _add_object(self, subject_name: str, predicate_str: str, obj_value: str, obj_type_hint: str | None = None):
@@ -175,7 +201,7 @@ class Dataset_KG(Dataset):
             obj_label = self._class_for_entity(obj_norm) or "Entity"
             with self.driver.session(database=self.neo4j_database) as sess:
                 # 确保目标存在
-                sess.run(f"MERGE (o:{obj_label} {{name:$obj}})", {"obj": obj_norm})
+                sess.run(f"MERGE (o:{obj_label} {{name:$obj}})", {"obj": obj_norm})  # type: ignore[arg-type]
                 # 单值状态维护：当前停机位在到达时更新
                 if predicate_str == "到达停机位":
                     # 先删除已有 HAS_CURRENT_GATE
@@ -188,18 +214,46 @@ class Dataset_KG(Dataset):
                         "MATCH (s {name:$s}),(o {name:$o}) MERGE (s)-[:HAS_CURRENT_GATE]->(o)",
                         {"s": subject_name, "o": obj_norm},
                     )
-                # 写入指定关系
+                # 冲突处理：对于单值关系，若已存在指向其它客体的边，先删除后再合入
+                if rel_type in self.SINGLE_VALUED_RELS:
+                    sess.run(
+                        f"MATCH (s {{name:$s}})-[r:{rel_type}]->(x) WHERE x.name <> $o DELETE r",  # type: ignore[arg-type]
+                        {"s": subject_name, "o": obj_norm},
+                    )
+                # 写入（或保持）指定关系
                 sess.run(
-                    f"MATCH (s {{name:$s}}),(o {{name:$o}}) MERGE (s)-[r:{rel_type}]->(o)",
+                    f"MATCH (s {{name:$s}}),(o {{name:$o}}) MERGE (s)-[r:{rel_type}]->(o)",  # type: ignore[arg-type]
                     {"s": subject_name, "o": obj_norm},
                 )
         else:
-            # 属性更新为单值
+            # 属性更新为单值 +（可选）值节点关系
             prop = meta["prop"]
             value = str(obj_value).replace("（", "(").replace("）", ")").replace("，", ",")
+            # 规范化特殊值（如 坐标）
+            if predicate_str == "坐标":
+                value = value.replace(" ", "")
             with self.driver.session(database=self.neo4j_database) as sess:
+                # 1) 更新主体属性
                 sess.run("MATCH (s {name:$name}) SET s[$prop] = $val",
                          {"name": subject_name, "prop": prop, "val": value})
+                # 2) 若定义了 rel 与值节点标签，则补充值节点与关系
+                rel_type = meta.get("rel")
+                val_label = meta.get("val_label")
+                if rel_type and val_label:
+                    # 单值化：确保同一主体在该 HAS_* 关系下只连向该值
+                    sess.run(
+                        f"MATCH (s {{name:$s}})-[r:{rel_type}]->(x) WHERE x.name <> $o DELETE r",  # type: ignore[arg-type]
+                        {"s": subject_name, "o": value},
+                    )
+                    # 合入值节点与关系
+                    sess.run(
+                        f"MERGE (o:{val_label} {{name:$o}})",  # type: ignore[arg-type]
+                        {"o": value},
+                    )
+                    sess.run(
+                        f"MATCH (s {{name:$s}}),(o {{name:$o}}) MERGE (s)-[:{rel_type}]->(o)",  # type: ignore[arg-type]
+                        {"s": subject_name, "o": value},
+                    )
 
     # 规范化/类型推断
     def _canon_entity(self, ent: str, predicate: str | None = None) -> str:
@@ -213,11 +267,15 @@ class Dataset_KG(Dataset):
             return f"停机位{int(m_gate_num.group(1))}"
 
         # 跑道：Z / 29 / 30 / 31 -> 跑道Z/跑道29...
-        if predicate == "使用跑道":
+        # 同义谓词："着陆跑道" 与 "使用跑道" 一致
+        if predicate in {"使用跑道", "着陆跑道"}:
             if ent.upper() == "Z":
                 return "跑道Z"
             if re.fullmatch(r"\d+", ent):
                 return f"跑道{ent}"
+            # 若文本即为“着陆跑道”，统一归一为“跑道Z”
+            if ent in {"着陆跑道", "着陆跑道Z", "着陆跑道z"}:
+                return "跑道Z"
 
         # 统一“坐标(60,260)”
         if predicate == "坐标":
@@ -285,7 +343,7 @@ class Dataset_KG(Dataset):
                 meta = self.PREDICATE_MAP.get(predicate)
                 if meta and meta["type"] == "rel":
                     rs = sess.run(
-                        f"MATCH (s {{name:$name}})-[r:{meta['rel']}]->(o) RETURN o.name AS oname",
+                        f"MATCH (s {{name:$name}})-[r:{meta['rel']}]->(o) RETURN o.name AS oname",  # type: ignore[arg-type]
                         {"name": s_c},
                     )
                     for r in rs:
@@ -312,9 +370,139 @@ class Dataset_KG(Dataset):
 
     def graph_snapshot(self):
         with self.driver.session(database=self.neo4j_database) as sess:
-            n = sess.run("MATCH (n) RETURN count(n) AS c").single()["c"]
-            r = sess.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"]
-            return {"nodes_count": int(n), "edges_count": int(r)}
+            row_n = sess.run("MATCH (n) RETURN count(n) AS c").single()
+            row_r = sess.run("MATCH ()-[r]->() RETURN count(r) AS c").single()
+            n = int(row_n["c"]) if row_n and "c" in row_n else 0
+            r = int(row_r["c"]) if row_r and "c" in row_r else 0
+            return {"nodes_count": n, "edges_count": r}
+
+    # ----------------------------
+    # 文本化上下文与冲突检测（用于训练数据准备）
+    # ----------------------------
+    def text_context(self, focus_entities: list[str] | None = None, max_edges: int = 200) -> str:
+        """将当前 KG 的局部状态渲染为可读文本，供模型作为上下文。
+
+        - 若指定 focus_entities，则优先输出这些实体的一阶出入边；否则输出全局快照信息。
+        """
+        lines: list[str] = []
+        try:
+            if focus_entities:
+                for ent in focus_entities:
+                    nb = self.neighbors(ent)
+                    if nb.get('out'):
+                        for s, p, o in nb['out'][: max_edges // 2]:
+                            lines.append(f"{s} -[{p}]-> {o}")
+                    if nb.get('in'):
+                        for s, p, o in nb['in'][: max_edges // 2]:
+                            lines.append(f"{s} -[{p}]-> {o}")
+            else:
+                snap = self.graph_snapshot()
+                lines.append(f"[SNAPSHOT] nodes={snap.get('nodes_count',0)} edges={snap.get('edges_count',0)}")
+        except Exception:
+            pass
+        ctx = "\n".join(lines[:max_edges])
+        if not ctx:
+            ctx = "(当前图为空或仅有固定节点)"
+        return "【KG状态】\n" + ctx
+
+    # ---- 冲突检测基础查询 ----
+    def _other_aircraft_at_gate(self, gate_name: str, exclude_aircraft: str | None = None) -> list[str]:
+        """返回在指定停机位上（当前/分配）的其它飞机名称列表。"""
+        names: set[str] = set()
+        with self.driver.session(database=self.neo4j_database) as sess:
+            # 当前停机位
+            rs1 = sess.run(
+                "MATCH (a:Aircraft)-[:HAS_CURRENT_GATE]->(g:Stand {name:$g}) RETURN a.name AS name",
+                {"g": gate_name},
+            )
+            for r in rs1:
+                n = str(r.get("name", ""))
+                if n:
+                    names.add(n)
+            # 分配停机位
+            rs2 = sess.run(
+                "MATCH (a:Aircraft)-[:ASSIGNED_GATE]->(g:Stand {name:$g}) RETURN a.name AS name",
+                {"g": gate_name},
+            )
+            for r in rs2:
+                n = str(r.get("name", ""))
+                if n:
+                    names.add(n)
+        if exclude_aircraft:
+            names.discard(exclude_aircraft)
+        return sorted(names)
+
+    def _other_aircraft_using_runway(self, runway_name: str, exclude_aircraft: str | None = None) -> list[str]:
+        names: set[str] = set()
+        with self.driver.session(database=self.neo4j_database) as sess:
+            rs = sess.run(
+                "MATCH (a:Aircraft)-[:USES_RUNWAY]->(r:Runway {name:$r}) RETURN a.name AS name",
+                {"r": runway_name},
+            )
+            for r in rs:
+                n = str(r.get("name", ""))
+                if n:
+                    names.add(n)
+        if exclude_aircraft:
+            names.discard(exclude_aircraft)
+        return sorted(names)
+
+    def _other_devices_towing_aircraft(self, aircraft_name: str, exclude_device: str | None = None) -> list[str]:
+        names: set[str] = set()
+        with self.driver.session(database=self.neo4j_database) as sess:
+            rs = sess.run(
+                "MATCH (d:Device)-[:TOWS]->(a:Aircraft {name:$a}) RETURN d.name AS name",
+                {"a": aircraft_name},
+            )
+            for r in rs:
+                n = str(r.get("name", ""))
+                if n:
+                    names.add(n)
+        if exclude_device:
+            names.discard(exclude_device)
+        return sorted(names)
+
+    def check_event_conflicts(self, event_text: str) -> dict:
+        """对单条事件进行简单规则的冲突检测（只读；不会写回图谱）。
+
+        返回：{"is_conflict": bool, "reasons": [str,...], "triples": [(s,p,o), ...]}
+        规则示例（启发式，便于自动生成标注）：
+        - 到达/目标/分配 停机位G：若KG中已有其他飞机的当前或分配为G，则判为冲突（占用冲突）。
+        - 使用/着陆 跑道R：若KG中已有其他飞机正在使用R，则可能冲突（跑道占用）。
+        - 设备 牵引 飞机A：若KG中已有其它设备正牵引A，则判为冲突（多设备冲突）。
+        """
+        reasons: list[str] = []
+        conflict = False
+        triples = extract_triples(event_text)
+
+        for s, p, o in triples:
+            s = str(s)
+            p = str(p)
+            o = str(o)
+            # 规范化用于匹配（与构图时一致）
+            s_label = self._class_for_entity(self._canon_entity(s)) or "Entity"
+            if p in {"到达停机位", "目标停机位", "分配停机位"}:
+                gate = self._canon_entity(o, p)
+                others = self._other_aircraft_at_gate(gate, exclude_aircraft=s)
+                if others:
+                    conflict = True
+                    reasons.append(f"停机位占用冲突：{gate} 已有关联飞机 {', '.join(others)}")
+            elif p in {"使用跑道", "着陆跑道"}:
+                runway = self._canon_entity(o, p)
+                others = self._other_aircraft_using_runway(runway, exclude_aircraft=s)
+                if others:
+                    conflict = True
+                    reasons.append(f"跑道占用冲突：{runway} 已有飞机 {', '.join(others)} 正在使用")
+            elif p == "牵引":
+                # s 可能是设备，o 是飞机
+                aircraft = self._canon_entity(o)
+                device = self._canon_entity(s)
+                other_devices = self._other_devices_towing_aircraft(aircraft, exclude_device=device)
+                if other_devices:
+                    conflict = True
+                    reasons.append(f"牵引冲突：飞机 {aircraft} 已被 {', '.join(other_devices)} 牵引")
+
+        return {"is_conflict": conflict, "reasons": reasons, "triples": triples}
 
     # ----------------------------
     # 维护操作：重置图谱（可保留固定节点）
@@ -518,5 +706,178 @@ class Dataset_KG(Dataset):
 
         size = os.path.getsize(path) if os.path.exists(path) else 0
         return {"nodes": int(nodes_count), "edges": int(edges_count), "path": path, "size": int(size)}
+
+
+# ----------------------------
+# 规则学习：训练数据构造（SFT）
+# ----------------------------
+def load_instruction_jsonl(path: str) -> list[dict]:
+    """读取 JSONL（每行包含 instruction/input/output）。非法行将被跳过。"""
+    arr: list[dict] = []
+    with open(path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if all(k in obj for k in ("instruction", "input", "output")):
+                    arr.append(obj)
+            except Exception:
+                continue
+    return arr
+
+
+def _read_text(path: str) -> str:
+    with open(path, 'r', encoding='utf-8') as f:
+        return f.read()
+
+
+def _clean_markdown_images(md: str) -> str:
+    # 去除图片/空白行
+    md = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", md)
+    md = "\n".join([ln.rstrip() for ln in md.splitlines() if ln.strip() != ""])  # 去空白行
+    return md
+
+
+def build_rules_sft_samples_from_md(rules_md_path: str, *, max_samples: int = 50, chunk_chars: int = 2000) -> list[dict]:
+    """基于规则 Markdown 文档构造一个极简的SFT训练集（占位用）。
+
+    返回的每个样本形如：{"instruction", "input", "output"}
+    - instruction: 固定为“提炼冲突判断检查要点”
+    - input: 规则文档片段（加上【规则文档】前缀）
+    - output: 占位答案（建议替换为人工标注）
+    """
+    if not os.path.isfile(rules_md_path):
+        raise FileNotFoundError(rules_md_path)
+    md = _read_text(rules_md_path)
+    md = _clean_markdown_images(md)
+    prefix = "【规则文档】\n"
+    chunks = [md[i:i+chunk_chars] for i in range(0, len(md), chunk_chars)]
+    samples: list[dict] = []
+    for i, ch in enumerate(chunks[:max_samples]):
+        samples.append({
+            "instruction": "请从规则文档片段中提炼面向冲突判断的检查要点（5-10条）",
+            "input": prefix + ch,
+            "output": "检查要点：1）… 2）… 3）…（此为占位样本，建议替换为人工标注数据）",
+        })
+    return samples
+
+
+# ----------------------------
+# 训练数据准备：结合 KG 状态的指令微调样本
+# ----------------------------
+def _build_rules_prompt_text(rules_md_path: str | None) -> str:
+    if not rules_md_path or not os.path.isfile(rules_md_path):
+        return ""
+    md = _read_text(rules_md_path)
+    md = _clean_markdown_images(md)
+    return "【规则文档】\n" + md
+
+
+def build_kg_sft_samples_from_events(
+    kg: Dataset_KG | None,
+    events: list[str],
+    *,
+    rules_md_path: str | None = None,
+    focus_entities: list[str] | None = None,
+    max_edges: int = 200,
+    auto_label: bool = True,
+) -> list[dict]:
+    """基于 KG 状态与事件文本，构造包含上下文的 SFT 样本。
+
+    每个样本形如：{"instruction", "input", "output"}
+    - instruction：固定任务描述
+    - input：规则文档文本（可选） + KG状态文本 + 事件文本
+    - output：
+        * auto_label=True：使用启发式冲突检测自动生成“结论/依据/建议”占位答案
+        * 否则：生成待人工标注的模板
+    """
+    rules_text = _build_rules_prompt_text(rules_md_path)
+    instr = "任务：判断以下事件是否与当前状态或规则冲突。请先给出结论（合规/冲突），再给出1-3条依据，最后给出可操作建议。"
+    samples: list[dict] = []
+    for ev in events:
+        if not isinstance(ev, str) or not ev.strip():
+            continue
+        ev = ev.strip()
+        kg_text = (
+            kg.text_context(focus_entities=focus_entities, max_edges=max_edges)
+            if kg is not None else "【KG状态】\n(离线模式，未加载图谱)"
+        )
+        prompt_parts = [rules_text, kg_text, "【事件】\n" + ev, "输出格式：结论+依据+建议"]
+        input_text = "\n\n".join([p for p in prompt_parts if p])
+
+        if auto_label:
+            if kg is None:
+                # 离线模式无法做基于KG的自动冲突检测，输出温和的占位弱标签
+                concl = "合规"
+                reasons = ["离线模式未加载KG，无法自动冲突检测"]
+                advice = "请结合实时KG状态进行复核。"
+                output = (
+                    f"结论：{concl}\n"
+                    f"依据：\n- " + "\n- ".join(reasons[:3]) + "\n"
+                    f"建议：{advice}"
+                )
+            else:
+                chk = kg.check_event_conflicts(ev)
+                concl = "冲突" if chk.get("is_conflict") else "合规"
+                reasons = chk.get("reasons") or ["未发现与当前KG状态明显冲突"]
+                # 简要建议模板
+                if concl == "冲突":
+                    advice = "请及时协调资源（调整跑道/停机位/设备），确保安全与流程合规。"
+                else:
+                    advice = "按计划执行，保持与现场状态一致并持续监控。"
+                output = (
+                    f"结论：{concl}\n"
+                    f"依据：\n- " + "\n- ".join(reasons[:3]) + "\n"
+                    f"建议：{advice}"
+                )
+        else:
+            output = (
+                "结论：<合规/冲突>\n"
+                "依据：\n- <依据1>\n- <依据2>\n"
+                "建议：<可操作建议>"
+            )
+
+        samples.append({
+            "instruction": instr,
+            "input": input_text,
+            "output": output,
+        })
+    return samples
+
+
+def save_jsonl(samples: list[dict], out_path: str):
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, 'w', encoding='utf-8') as f:
+        for obj in samples:
+            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+def load_events_from_file(path: str) -> list[str]:
+    """读取事件列表：支持 .txt（每行一条）或 .jsonl（优先使用 text/event 字段）。"""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+    events: list[str] = []
+    if path.lower().endswith('.txt'):
+        with open(path, 'r', encoding='utf-8') as f:
+            for ln in f:
+                s = ln.strip()
+                if s:
+                    events.append(s)
+    else:
+        with open(path, 'r', encoding='utf-8') as f:
+            for ln in f:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    obj = json.loads(ln)
+                    val = obj.get('text') or obj.get('event') or obj.get('input')
+                    if isinstance(val, str) and val.strip():
+                        events.append(val.strip())
+                except Exception:
+                    continue
+    return events
 
 

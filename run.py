@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """
-一键运行端到端流程：
-1) 原始 CSV 预处理 -> JSONL 文本
-2) 批量三元组抽取
-3) 打包训练 JSON
-4) 构建 RDF 知识图谱并导出 TTL
+一键运行：支持多种模式
+ pipeline: 原始CSV -> 流式抽取 -> 可选构建KG -> 导出产物
+ train:    对 Qwen3-4B 进行 LoRA 训练（学习航保规则/冲突判定）
+ judge:    单条事件判冲突（外挂KG+规则提示）
+ stream-judge: 事件流判冲突（小批量流式推理）
 """
 
 import os
@@ -13,12 +13,12 @@ import random
 import numpy as np
 from typing import Optional, Tuple
 
+from exp.exp_main import Exp_main
 try:
     import torch
 except ImportError:
     torch = None
 
-from exp.exp_main import Exp_main
 
 
 def _try_connect_neo4j(
@@ -134,11 +134,11 @@ def main():
     default_texts_jsonl = os.path.join(default_out_dir, "train_texts.jsonl")
     default_triples_jsonl = os.path.join(default_out_dir, "train_triples.jsonl")
     default_train_jsonl = os.path.join(default_out_dir, "train_for_model.jsonl")
-    default_ttl_out = os.path.join(default_root, "resoterd", "output", "kg.ttl")
-    default_png_out = os.path.join(default_root, "resoterd", "output", "kg.png")
-    default_steps_dir = os.path.join(default_root, "resoterd", "output", "kg_steps")
+    default_ttl_out = os.path.join(default_root, "output", "kg.ttl")
+    default_png_out = os.path.join(default_root, "output", "kg.png")
+    default_steps_dir = os.path.join(default_root, "output", "kg_steps")
 
-    parser = argparse.ArgumentParser(description="Run KG Pipeline")
+    parser = argparse.ArgumentParser(description="Run haitianbei modes: pipeline/train/judge/stream-judge")
     parser.add_argument("--root", default=default_root, help="项目根路径")
     parser.add_argument(
         "--input_csv", default=default_input_csv, help="原始 CSV 文件路径"
@@ -198,6 +198,42 @@ def main():
             user_default = u or user_default
             pwd_default = p or pwd_default
         return user_default, pwd_default
+
+    # 模式选择
+    parser.add_argument("--mode", choices=["pipeline", "train", "judge", "stream-judge"], default="pipeline",
+                        help="运行模式：pipeline/train/judge/stream-judge")
+
+    # 模型相关
+    parser.add_argument("--base_model_dir", default=os.path.join(default_root, "models", "Qwen3-4B"),
+                        help="底座模型目录（Qwen3-4B）")
+    parser.add_argument("--lora_out_dir", default=os.path.join(default_root, "results_entity_judge", "lora"),
+                        help="LoRA 训练输出目录")
+    parser.add_argument("--lora_adapter_dir", default=None, help="推理时加载的 LoRA 适配器目录")
+
+    # 规则文档与训练数据
+    parser.add_argument("--rules_md_path", default=None, help="规则文档（海天杯-技术资料.md）路径")
+
+    # 训练超参
+    parser.add_argument("--num_train_epochs", type=int, default=1)
+    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=1)
+    parser.add_argument("--grad_accum_steps", type=int, default=1, help="梯度累积步数（建议CPU先设为1以便看到进度）")
+    parser.add_argument("--max_seq_len", type=int, default=1024, help="训练时的最大序列长度（越小越快）")
+    parser.add_argument("--log_steps", type=int, default=1, help="每多少个优化步打印一次训练日志（越小越详细）")
+    parser.add_argument("--use_4bit", action="store_true", default=False, help="开启4bit量化（Windows 常不建议）")
+    parser.add_argument("--no_fp16", action="store_true", default=False, help="关闭fp16，改用bf16/float32")
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto", help="训练设备优先级：auto/cuda/cpu")
+
+    # 推理（judge/stream-judge）
+    parser.add_argument("--event_text", default=None, help="单条事件文本（judge 模式）")
+    parser.add_argument("--events_file", default=None, help="事件文本文件（每行一条，stream-judge 模式）")
+    parser.add_argument("--focus_entities", default=None, help="逗号分隔的关注实体，例如: 飞机A001,停机位14")
+    parser.add_argument("--no_vllm", action="store_true", default=False, help="禁用 vLLM，回退 transformers 推理")
+    parser.add_argument("--batch_size", type=int, default=4, help="stream-judge 小批量大小")
+    parser.add_argument("--simple_output", action="store_true", default=False, help="推理仅输出‘合规/冲突’，不带依据与建议")
+
+    # 训练时动态拼接KG上下文（基于样本事件自动检索邻接）
+    parser.add_argument("--no_augment_train_with_kg", action="store_true", default=False, help="禁用：为训练样本动态拼接KG上下文")
 
     _env_user, _env_pwd = _defaults_from_env()
     parser.add_argument(
@@ -261,32 +297,95 @@ def main():
         print(f"[Neo4j] 连接测试: PASS ({used_uri})")
     else:
         print("[Neo4j] 连接测试失败:", err)
-        if args.allow_offline:
-            print("[Neo4j] 启用离线模式：跳过图谱阶段，仅运行前 3 步。")
-            setattr(args, "skip_kg", True)
+        if args.mode == "pipeline":
+            if args.allow_offline:
+                print("[Neo4j] 启用离线模式：跳过图谱阶段，仅运行前 3 步。")
+                setattr(args, "skip_kg", True)
+            else:
+                print("排查建议:")
+                print("  1) 确认 Docker 容器状态为 Up/healthy，且端口映射包含 7687->7687 与 7474->7474")
+                print("  2) 若启用了加密或自签名证书，请将 --neo4j-uri 设为 neo4j+ssc://localhost:7687 或 bolt+ssc://localhost:7687")
+                print("  3) 若端口 7687 被错误映射到 7474（HTTP），会出现 handshake 错误，请重新创建容器并修正 -p 7687:7687")
+                print("  4) 也可先使用 --allow_offline 运行前 3 步，稍后再接入数据库")
+                return
         else:
-            print("排查建议:")
-            print(
-                "  1) 确认 Docker 容器状态为 Up/healthy，且端口映射包含 7687->7687 与 7474->7474"
-            )
-            print(
-                "  2) 若启用了加密或自签名证书，请将 --neo4j-uri 设为 neo4j+ssc://localhost:7687 或 bolt+ssc://localhost:7687"
-            )
-            print(
-                "  3) 若端口 7687 被错误映射到 7474（HTTP），会出现 handshake 错误，请重新创建容器并修正 -p 7687:7687"
-            )
-            print("  4) 也可先使用 --allow_offline 运行前 3 步，稍后再接入数据库")
-            return
+            # 训练/推理模式下若 Neo4j 不可用，自动跳过 KG
+            print("[Neo4j] 在当前模式下将自动跳过 KG（仍可进行训练/推理）")
+            setattr(args, "skip_kg", True)
+
+    # 统一放入供 Exp_main 读取
+    setattr(args, "base_model_dir", args.base_model_dir)
+    setattr(args, "lora_out_dir", args.lora_out_dir)
 
     exp = Exp_main(args)
-    result = exp.run()
-    print("\n=== Pipeline Finished ===")
-    print("texts_jsonl :", result["texts_jsonl"])
-    print("triples_jsonl:", result["triples_jsonl"])
-    print("train_jsonl  :", result["train_jsonl"])
-    print("ttl_out      :", result["ttl_out"])
-    print("png_out      :", result["png_out"])
-    print("kg_snapshot  :", result["kg_snapshot"])
+
+    if args.mode == "pipeline":
+        result = exp.run()
+        print("\n=== Pipeline Finished ===")
+        print("texts_jsonl :", result["texts_jsonl"])
+        print("triples_jsonl:", result["triples_jsonl"])
+        print("train_jsonl  :", result["train_jsonl"])
+        print("ttl_out      :", result["ttl_out"])
+        print("png_out      :", result["png_out"])
+        print("kg_snapshot  :", result["kg_snapshot"])
+    elif args.mode == "train":
+        fp16 = (not args.no_fp16)
+        info = exp.train_rules_lora(
+            train_jsonl=args.train_jsonl,
+            rules_md_path=args.rules_md_path,
+            output_dir=args.lora_out_dir,
+            num_train_epochs=args.num_train_epochs,
+            learning_rate=args.learning_rate,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            use_4bit=args.use_4bit,
+            fp16=fp16,
+            augment_train_with_kg=(not args.no_augment_train_with_kg),
+            gradient_accumulation_steps=max(1, int(args.grad_accum_steps)),
+            max_seq_len=max(128, int(args.max_seq_len)),
+            prefer_device=args.device,
+            log_steps=max(1, int(args.log_steps)),
+        )
+        print("\n=== Train Finished ===")
+        print("adapter_dir :", info.get("adapter_dir"))
+        print("samples     :", info.get("samples"))
+    elif args.mode == "judge":
+        if not args.event_text:
+            print("[judge] 需要 --event_text")
+            return
+        focus = [s.strip() for s in (args.focus_entities or "").split(",") if s.strip()]
+        res = exp.judge_conflict(
+            event_text=args.event_text,
+            focus_entities=(focus or None),
+            rules_md_path=args.rules_md_path,
+            lora_adapter_dir=args.lora_adapter_dir,
+            use_vllm=(not args.no_vllm),
+            simple_output=bool(args.simple_output),
+        )
+        print("\n=== Judge Result ===")
+        print(res["output"])
+    elif args.mode == "stream-judge":
+        if not args.events_file or not os.path.isfile(args.events_file):
+            print("[stream-judge] 需要 --events_file (每行一条事件)")
+            return
+        with open(args.events_file, "r", encoding="utf-8") as f:
+            events = [ln.strip() for ln in f if ln.strip()]
+        focus = [s.strip() for s in (args.focus_entities or "").split(",") if s.strip()]
+        print("\n=== Stream Judge Start ===")
+        count = 0
+        for ev, out in exp.stream_judge_conflicts(
+            events_iter=events,
+            focus_entities=(focus or None),
+            rules_md_path=args.rules_md_path,
+            lora_adapter_dir=args.lora_adapter_dir,
+            use_vllm=(not args.no_vllm),
+            batch_size=max(1, int(args.batch_size)),
+            simple_output=bool(args.simple_output),
+        ):
+            count += 1
+            print(f"[#{count}] 事件: {ev}")
+            print(out)
+            print("-" * 60)
+        print("=== Stream Judge End ===")
 
 
 if __name__ == "__main__":
