@@ -18,6 +18,7 @@ from exp.exp_basic import Exp_Basic
 from models.triples_extraction import extract_triples as _extract_triples
 from data_provider.data_loader import Dataset_KG
 from data_provider.data_loader import load_instruction_jsonl, build_rules_sft_samples_from_md
+from data_provider.data_loader import load_events_from_file  # type: ignore
 import os
 import json
 from typing import Optional
@@ -74,6 +75,8 @@ class Exp_main(Exp_Basic):
         self.base_model_dir = getattr(args, 'base_model_dir', os.path.join(self.root, 'models', 'Qwen3-4B'))
         # LoRA 输出目录
         self.lora_out_dir = getattr(args, 'lora_out_dir', os.path.join(self.root, 'results_entity_judge', 'lora'))
+        # 小LLM（问题分解）相关配置
+        self.decomp_base_model_dir = getattr(args, 'decomp_base_model_dir', self.base_model_dir)
 
     def _build_model(self):
         """占位，满足基类在构造时的要求（torch 可选）。"""
@@ -94,27 +97,48 @@ class Exp_main(Exp_Basic):
             # 读取训练超参
             fp16 = not bool(getattr(self.args, 'no_fp16', False))
             train_backend = str(getattr(self.args, 'train_backend', 'hf') or 'hf').lower()
+            train_task = str(getattr(self.args, 'train_task', 'judge') or 'judge').lower()
             # 如选择 llama-factory，用其执行 LoRA 训练
             if train_backend in ('llama-factory', 'llamafactory', 'lf'):
-                info = self.train_rules_lora_with_llamafactory(
-                    train_jsonl=getattr(self.args, 'train_jsonl', None),
-                    rules_md_path=getattr(self.args, 'rules_md_path', None),
-                    output_dir=getattr(self.args, 'lora_out_dir', self.lora_out_dir),
-                    num_train_epochs=int(getattr(self.args, 'num_train_epochs', 1)),
-                    learning_rate=float(getattr(self.args, 'learning_rate', 2e-5)),
-                    per_device_train_batch_size=int(getattr(self.args, 'per_device_train_batch_size', 1)),
-                    gradient_accumulation_steps=int(getattr(self.args, 'grad_accum_steps', 1)),
-                    max_seq_len=int(getattr(self.args, 'max_seq_len', 1024)),
-                    fp16=fp16,
-                )
+                if train_task in ('decompose', 'decomp'):
+                    # 优先使用专用输出目录；否则回退到通用目录
+                    _out = getattr(self.args, 'decomp_lora_out_dir', None) or getattr(self.args, 'lora_out_dir', self.lora_out_dir)
+                    info = self.train_decomposer_with_llamafactory(
+                        # 数据来源：优先 decomp_events_file；否则从 train_jsonl 推断
+                        decomp_events_file=getattr(self.args, 'decomp_events_file', None),
+                        train_jsonl=getattr(self.args, 'train_jsonl', None),
+                        rules_md_path=getattr(self.args, 'rules_md_path', None),
+                        output_dir=_out,
+                        num_train_epochs=int(getattr(self.args, 'num_train_epochs', 1)),
+                        learning_rate=float(getattr(self.args, 'learning_rate', 2e-5)),
+                        per_device_train_batch_size=int(getattr(self.args, 'per_device_train_batch_size', 1)),
+                        gradient_accumulation_steps=int(getattr(self.args, 'grad_accum_steps', 1)),
+                        max_seq_len=int(getattr(self.args, 'max_seq_len', 1024)),
+                        fp16=fp16,
+                    )
+                else:
+                    _out = getattr(self.args, 'judge_lora_out_dir', None) or getattr(self.args, 'lora_out_dir', self.lora_out_dir)
+                    info = self.train_rules_lora_with_llamafactory(
+                        train_jsonl=getattr(self.args, 'train_jsonl', None),
+                        rules_md_path=getattr(self.args, 'rules_md_path', None),
+                        output_dir=_out,
+                        num_train_epochs=int(getattr(self.args, 'num_train_epochs', 1)),
+                        learning_rate=float(getattr(self.args, 'learning_rate', 2e-5)),
+                        per_device_train_batch_size=int(getattr(self.args, 'per_device_train_batch_size', 1)),
+                        gradient_accumulation_steps=int(getattr(self.args, 'grad_accum_steps', 1)),
+                        max_seq_len=int(getattr(self.args, 'max_seq_len', 1024)),
+                        fp16=fp16,
+                    )
                 print("\n=== Train Finished (LLaMA-Factory) ===")
                 print("adapter_dir :", info.get("adapter_dir"))
                 print("samples     :", info.get("samples"))
                 return info
+            # Transformers+PEFT 路径
+            _out = getattr(self.args, 'judge_lora_out_dir', None) or getattr(self.args, 'lora_out_dir', self.lora_out_dir)
             info = self.train_rules_lora(
                 train_jsonl=getattr(self.args, 'train_jsonl', None),
                 rules_md_path=getattr(self.args, 'rules_md_path', None),
-                output_dir=getattr(self.args, 'lora_out_dir', self.lora_out_dir),
+                output_dir=_out,
                 num_train_epochs=int(getattr(self.args, 'num_train_epochs', 1)),
                 learning_rate=float(getattr(self.args, 'learning_rate', 2e-5)),
                 per_device_train_batch_size=int(getattr(self.args, 'per_device_train_batch_size', 1)),
@@ -162,6 +186,7 @@ class Exp_main(Exp_Basic):
             use_vllm=use_vllm,
             batch_size=batch_size,
             simple_output=simple_output,
+            show_decomposition=bool(getattr(self.args, 'print_decomposition', False)),
         ):
             count += 1
             print(f"[#{count}] 事件: {ev}")
@@ -248,6 +273,27 @@ class Exp_main(Exp_Basic):
         parts = [rules_text, kg_text, "【事件】\n" + event_text, instruction]
         return "\n\n".join([p for p in parts if p])
 
+    def _format_decompose_prompt(self, event_text: str, rules_text: str, kg_text: str) -> str:
+        """为小LLM构造问题分解提示，要求输出 JSON 结构，聚焦三类冲突。
+
+        目标输出示例：
+        {
+            "entities": ["飞机A001", "跑道Z", "停机位14"],
+            "applicable_rules": ["跑道同一时刻仅一架", "停机位一次仅一架"],
+            "potential_conflicts": ["跑道Z 已被 飞机B12 使用", "停机位14 已有关联飞机 飞机C01"],
+            "notes": "仅围绕跑道/停机位/牵引三类冲突分解"
+        }
+        """
+        instruction = (
+            "请将以下判冲突任务分解为结构化步骤，并只输出一个JSON对象：\n"
+            "- 第一步：提取关键实体（飞机/跑道/停机位/牵引车）。\n"
+            "- 第二步：匹配可能相关的规则要点（仅围绕‘跑道互斥’、‘停机位互斥’、‘牵引唯一’）。\n"
+            "- 第三步：基于当前KG状态列出潜在冲突点（用简短文本描述即可）。\n"
+            "不要输出多余解释或格式。"
+        )
+        parts = [rules_text, kg_text, "【事件】\n" + event_text, instruction]
+        return "\n\n".join([p for p in parts if p])
+
     def train_rules_lora(self,
               train_jsonl: Optional[str] = None,
               rules_md_path: Optional[str] = None,
@@ -285,6 +331,12 @@ class Exp_main(Exp_Basic):
 
         model_dir = self.base_model_dir
         out_dir = output_dir or self.lora_out_dir
+        # 若未显式区分目录，默认将判定任务输出到 lora/judge，避免与分解器互相覆盖
+        try:
+            if (output_dir is None) or (os.path.abspath(output_dir) == os.path.abspath(self.lora_out_dir)):
+                out_dir = os.path.join(self.lora_out_dir, "judge")
+        except Exception:
+            pass
         os.makedirs(out_dir, exist_ok=True)
 
         # 构造训练数据集（模块化迁移到 data_loader）
@@ -421,7 +473,7 @@ class Exp_main(Exp_Basic):
             dtype=_torch_dtype,
         )
 
-        lora_cfg = LoraConfig(
+        lora_cfg = LoraConfig(  # type: ignore[call-arg]
             task_type=TaskType.CAUSAL_LM,
             r=lora_r,
             lora_alpha=lora_alpha,
@@ -468,7 +520,19 @@ class Exp_main(Exp_Basic):
         if _datasets is None:
             # 先在主进程中完成 tokenize，避免在 worker 里调用局部闭包
             _encoded = [_tok_map(x) for x in samples]
-            ds_train = _MemDS(_encoded)
+            # 为满足 Trainer 类型要求，优先使用 torch.utils.data.Dataset 适配
+            try:
+                from torch.utils.data import Dataset as _TorchDS  # type: ignore
+                class _TorchDataset(_TorchDS):  # type: ignore
+                    def __init__(self, arr):
+                        self.arr = arr
+                    def __len__(self):
+                        return len(self.arr)
+                    def __getitem__(self, i):
+                        return self.arr[i]
+                ds_train = _TorchDataset(_encoded)
+            except Exception:
+                ds_train = _MemDS(_encoded)
         else:
             ds_train = _datasets.Dataset.from_list(samples).map(_tok_map, remove_columns=list(samples[0].keys()))
 
@@ -536,7 +600,7 @@ class Exp_main(Exp_Basic):
                         return str(x) if x is not None else "-"
                 print(f"[STEP] {gs}/{ms} | loss={_fmt_loss(loss)} | lr={_fmt_lr(lr)} | {steps_per_sec:.2f} steps/s | ETA {fmt_sec(eta_sec)}{mem_info}")
 
-        trainer = Trainer(model=model, args=args, train_dataset=ds_train, callbacks=[_ProgressCB(log_steps)])
+        trainer = Trainer(model=model, args=args, train_dataset=ds_train, callbacks=[_ProgressCB(log_steps)])  # type: ignore[arg-type]
         trainer.train()
         # 保存 LoRA 适配器
         adapter_dir = os.path.join(out_dir, "adapter")
@@ -598,6 +662,12 @@ class Exp_main(Exp_Basic):
 
         # 将样本写为 Alpaca JSON（list而非jsonl），便于 LLaMA-Factory 直接消费
         out_dir = output_dir or self.lora_out_dir
+        # 若未显式区分目录，默认将分解器输出到 lora/decomposer，避免与判定任务互相覆盖
+        try:
+            if (output_dir is None) or (os.path.abspath(output_dir) == os.path.abspath(self.lora_out_dir)):
+                out_dir = os.path.join(self.lora_out_dir, "decomposer")
+        except Exception:
+            pass
         data_dir = _os.path.join(out_dir, "llama_factory", "data")
         _os.makedirs(data_dir, exist_ok=True)
         data_file = _os.path.join(data_dir, "alpaca_sft.json")
@@ -706,6 +776,183 @@ class Exp_main(Exp_Basic):
         print(f"[LLaMA-Factory] 训练完成。输出目录: {out_dir}")
         return {"adapter_dir": out_dir, "samples": len(samples), "backend": "llama-factory"}
 
+    # ----------------------------
+    # 小LLM（问题分解）训练：优先 LLaMA-Factory
+    # ----------------------------
+    def train_decomposer_with_llamafactory(self,
+              decomp_events_file: Optional[str] = None,
+              train_jsonl: Optional[str] = None,
+              rules_md_path: Optional[str] = None,
+              output_dir: Optional[str] = None,
+              num_train_epochs: int = 1,
+              learning_rate: float = 2e-5,
+              per_device_train_batch_size: int = 1,
+              gradient_accumulation_steps: int = 8,
+              max_seq_len: int = 4096,
+              fp16: bool = True) -> dict:
+        """训练一个用于问题分解的小LLM（LoRA），让主LLM更聚焦冲突规则。优先使用 LLaMA-Factory。"""
+        import json as _json
+        import os as _os
+        import sys as _sys
+        import subprocess as _sp
+        from typing import List as _List
+
+        # 依赖检查
+        try:
+            import importlib.util as _ilu
+            if _ilu.find_spec("llamafactory") is None:
+                raise ImportError("llamafactory not installed")
+        except Exception:
+            raise RuntimeError("未检测到 LLaMA-Factory。请先 pip install -U llama-factory")
+
+        # 构造样本：优先从事件文件生成；否则从现有 JSONL 推断并生成分解输出
+        samples: list[dict] = []
+        def _rules_text():
+            return self.build_rules_prompt(rules_md_path) if rules_md_path else ""
+
+        def _kg_text_for_ev(ev: str) -> str:
+            try:
+                kg = Dataset_KG(
+                    self.root, load_data=False,
+                    neo4j_uri=self.neo4j_uri,
+                    neo4j_user=self.neo4j_user,
+                    neo4j_password=self.neo4j_password,
+                    neo4j_database=self.neo4j_database,
+                )
+            except Exception:
+                kg = None
+            if kg is None:
+                return "【KG状态】\n(离线模式，未加载图谱)"
+            # 聚焦当前事件内实体
+            ents = []
+            try:
+                for s, p, o in _extract_triples(ev):
+                    ents += [str(s), str(o)]
+            except Exception:
+                pass
+            see = []
+            for x in ents:
+                if x and (x not in see):
+                    see.append(x)
+            return self._kg_text_context(kg, focus_entities=(see or None))
+
+        def _build_one(ev: str) -> dict:
+            rtxt = _rules_text()
+            ktxt = _kg_text_for_ev(ev)
+            inp = "\n\n".join([x for x in (rtxt, ktxt, "【事件】\n" + ev) if x])
+            # 生成一个启发式的"分解输出"：使用规则+KG的简单检查
+            try:
+                kg2 = None
+                try:
+                    kg2 = Dataset_KG(self.root, load_data=False,
+                                     neo4j_uri=self.neo4j_uri,
+                                     neo4j_user=self.neo4j_user,
+                                     neo4j_password=self.neo4j_password,
+                                     neo4j_database=self.neo4j_database)
+                except Exception:
+                    kg2 = None
+                conflicts = []
+                if kg2 is not None:
+                    chk = kg2.check_event_conflicts(ev)
+                    conflicts = chk.get("reasons", []) or []
+            except Exception:
+                conflicts = []
+            # 目标是指导小LLM输出 JSON，但这里做一个占位示例输出作为监督
+            out_lines = [
+                "{",
+                "  \"entities\": [提示：抽取飞机/跑道/停机位/牵引车],",
+                "  \"applicable_rules\": [提示：列出与跑道互斥/停机位互斥/牵引唯一相关的规则要点],",
+                f"  \"potential_conflicts\": { _json.dumps(conflicts, ensure_ascii=False) }",
+                "}",
+            ]
+            return {
+                "instruction": "将规则+KG+事件分解为JSON（entities/applicable_rules/potential_conflicts）",
+                "input": inp,
+                "output": "\n".join(out_lines)
+            }
+
+        # 首选：事件文件
+        if decomp_events_file and _os.path.isfile(decomp_events_file):
+            evs = load_events_from_file(decomp_events_file)
+            for ev in evs:
+                if isinstance(ev, str) and ev.strip():
+                    samples.append(_build_one(ev.strip()))
+        # 备选：从现有 JSONL 的 input 字段提取事件行
+        if (not samples) and train_jsonl and _os.path.isfile(train_jsonl):
+            arr = load_instruction_jsonl(train_jsonl)
+            import re as _re
+            for ex in arr:
+                inp = str(ex.get("input", "") or "")
+                m = _re.search(r"【事件】\n(.+)$", inp, flags=_re.S)
+                ev = (m.group(1).strip() if m else inp.strip())
+                if ev:
+                    samples.append(_build_one(ev))
+        if not samples:
+            raise RuntimeError("未找到用于分解训练的样本（请提供 --decomp_events_file 或有效的 --train_jsonl）")
+
+        out_dir = output_dir or self.lora_out_dir
+        data_dir = _os.path.join(out_dir, "llama_factory", "data_decomp")
+        _os.makedirs(data_dir, exist_ok=True)
+        data_file = _os.path.join(data_dir, "alpaca_decomp.json")
+        with open(data_file, 'w', encoding='utf-8') as f:
+            _json.dump(samples, f, ensure_ascii=False, indent=2)
+        ds_info_path = _os.path.join(data_dir, "dataset_info.json")
+        ds_info = {
+            "alpaca_decomp": {
+                "file_name": "alpaca_decomp.json",
+                "formatting": "alpaca",
+                "columns": {"instruction": "instruction", "input": "input", "output": "output"}
+            }
+        }
+        with open(ds_info_path, 'w', encoding='utf-8') as f:
+            _json.dump(ds_info, f, ensure_ascii=False, indent=2)
+
+        _os.makedirs(out_dir, exist_ok=True)
+        cmd: _List[str] = [
+            _sys.executable, "-m", "llamafactory.cli", "train",
+            "--stage", "sft", "--do_train",
+            "--model_name_or_path", self.decomp_base_model_dir,
+            "--finetuning_type", "lora",
+            "--dataset_dir", data_dir,
+            "--dataset", "alpaca_decomp",
+            "--output_dir", out_dir,
+            "--num_train_epochs", str(int(num_train_epochs)),
+            "--per_device_train_batch_size", str(int(per_device_train_batch_size)),
+            "--learning_rate", str(float(learning_rate)),
+            "--cutoff_len", str(int(max_seq_len)),
+            "--gradient_accumulation_steps", str(int(gradient_accumulation_steps)),
+            "--save_steps", "200", "--logging_steps", "20",
+            "--template", "qwen", "--overwrite_output_dir"
+        ]
+        # 精度同前
+        try:
+            import torch as __torch
+            _has_cuda = __torch.cuda.is_available()
+            _bf16_ok = False
+            try:
+                _bf16_ok = bool(getattr(__torch.cuda, 'is_bf16_supported', lambda: False)())
+            except Exception:
+                try:
+                    cc = __torch.cuda.get_device_capability(0) if _has_cuda else (0, 0)
+                    _bf16_ok = (cc[0] >= 8)
+                except Exception:
+                    _bf16_ok = False
+            if _has_cuda:
+                if fp16:
+                    cmd += ["--fp16"]
+                else:
+                    if _bf16_ok:
+                        cmd += ["--bf16"]
+        except Exception:
+            pass
+
+        print("[LLaMA-Factory][Decomposer] 开始训练：", " ".join(cmd))
+        proc = _sp.run(cmd, cwd=self.root)
+        if proc.returncode != 0:
+            raise RuntimeError("LLaMA-Factory 分解器训练失败，请检查输出与环境。")
+        print(f"[LLaMA-Factory][Decomposer] 训练完成。输出目录: {out_dir}")
+        return {"adapter_dir": out_dir, "samples": len(samples), "backend": "llama-factory:decompose"}
+
     def generate_with_vllm(self, prompts: List[str], lora_adapter_dir: Optional[str] = None,
                             max_tokens: int = 256, temperature: float = 0.2) -> List[str]:
         """使用 vLLM 进行批量推理。若提供 LoRA 适配器，尝试加载。"""
@@ -739,6 +986,73 @@ class Exp_main(Exp_Basic):
                 texts.append("")
         return texts
 
+    def _generate_text(self, model_dir: str, prompts: List[str], *, lora_adapter_dir: Optional[str], use_vllm: bool,
+                        max_tokens: int = 256, temperature: float = 0.2) -> List[str]:
+        """通用生成器：优先 vLLM，其次 Transformers。"""
+        outs: Optional[List[str]] = None
+        if use_vllm:
+            try:
+                # 临时切换 base_model_dir
+                orig = self.base_model_dir
+                try:
+                    self.base_model_dir = model_dir
+                    outs = self.generate_with_vllm(prompts, lora_adapter_dir=lora_adapter_dir)
+                finally:
+                    self.base_model_dir = orig
+            except Exception as e:  # noqa: BLE001
+                print("[vLLM] 小LLM推理不可用或失败，自动回退 transformers：", e)
+                outs = None
+        if outs is None:
+            if transformers is None:
+                raise RuntimeError("需要安装 transformers 或 vllm 进行推理")
+            from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
+            tok = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True, use_fast=False)
+            if tok.pad_token is None:
+                tok.pad_token = tok.eos_token
+            mdl = AutoModelForCausalLM.from_pretrained(model_dir, trust_remote_code=True)
+            try:
+                import torch  # type: ignore
+                device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
+            except Exception:
+                device_str = 'cpu'
+            try:
+                if device_str == 'cuda':
+                    mdl = getattr(mdl.__class__, 'cuda')(mdl)
+                else:
+                    mdl = getattr(mdl.__class__, 'cpu')(mdl)
+            except Exception:
+                pass
+            if lora_adapter_dir:
+                try:
+                    from peft import PeftModel  # type: ignore
+                    mdl = PeftModel.from_pretrained(mdl, lora_adapter_dir)
+                    try:
+                        if device_str == 'cuda' and hasattr(mdl, 'cuda'):
+                            mdl = mdl.cuda()
+                        elif hasattr(mdl, 'cpu'):
+                            mdl = mdl.cpu()
+                    except Exception:
+                        pass
+                except Exception as _e:
+                    print("[infer] 加载 LoRA 适配器失败，改用基座模型：", _e)
+            outs = []
+            for p in prompts:
+                ids = tok(p, return_tensors='pt')
+                try:
+                    moved = {}
+                    for k, v in ids.items():
+                        if device_str == 'cuda':
+                            moved[k] = getattr(v.__class__, 'cuda')(v)
+                        else:
+                            moved[k] = getattr(v.__class__, 'cpu')(v)
+                    ids = moved
+                except Exception:
+                    pass
+                gen = mdl.generate(**ids, max_new_tokens=max_tokens, do_sample=False)
+                out = tok.decode(gen[0][ids['input_ids'].shape[1]:], skip_special_tokens=True)
+                outs.append(out)
+        return outs
+
     # 删除单条 judge 接口，统一通过 stream_judge_conflicts/Exp_main.run 路由
 
     def stream_judge_conflicts(self,
@@ -748,7 +1062,8 @@ class Exp_main(Exp_Basic):
                                lora_adapter_dir: Optional[str] = None,
                                use_vllm: bool = True,
                                batch_size: int = 4,
-                               simple_output: bool = False):
+                               simple_output: bool = False,
+                               show_decomposition: bool = False):
         """对事件流进行逐条/小批量判冲突（流式在推理时执行，而非训练时）。
 
         - events_iter: 可迭代的事件文本序列（例如生成器/列表）。
@@ -757,6 +1072,10 @@ class Exp_main(Exp_Basic):
         """
         # 规则提示一次构建，复用
         rules_text = self.build_rules_prompt(rules_md_path) if rules_md_path else ""
+        # 小LLM分解器配置
+        use_decomposer = bool(getattr(self.args, 'enable_decomposer', False))
+        decomp_adapter = getattr(self.args, 'decomp_lora_adapter_dir', None)
+        decomp_model_dir = getattr(self.args, 'decomp_base_model_dir', self.decomp_base_model_dir)
 
         kg = None
         if not self.skip_kg:
@@ -801,7 +1120,23 @@ class Exp_main(Exp_Basic):
             else:
                 cur_focus = None
             kg_text = self._kg_text_context(kg, focus_entities=cur_focus) if (kg is not None) else "【KG状态】\n(离线模式，未加载图谱)"
-            prompt = self._format_conflict_prompt_with_mode(ev, rules_text, kg_text, simple=simple_output)
+            # 可选：先调用小LLM做问题分解
+            decomp_text = None
+            if use_decomposer:
+                try:
+                    d_prompt = self._format_decompose_prompt(ev, rules_text, kg_text)
+                    d_outs = self._generate_text(decomp_model_dir, [d_prompt], lora_adapter_dir=decomp_adapter, use_vllm=use_vllm,
+                                                 max_tokens=256, temperature=0.0)
+                    decomp_text = (d_outs[0] if d_outs else "") or ""
+                except Exception as _e:
+                    decomp_text = None
+            # 可选：打印分解器输出，便于人工复核
+            if show_decomposition and decomp_text:
+                print("【问题分解(仅展示)】\n" + decomp_text)
+
+            # 主提示：附加分解结果（若有）
+            extra = ("\n\n【问题分解】\n" + decomp_text) if decomp_text else ""
+            prompt = self._format_conflict_prompt_with_mode(ev, rules_text, kg_text + extra, simple=simple_output)
             batch_events.append(ev)
             batch_prompts.append(prompt)
 

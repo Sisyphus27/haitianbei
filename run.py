@@ -55,7 +55,16 @@ def main():
                         help="底座模型目录（Qwen3-4B）")
     parser.add_argument("--lora_out_dir", default=os.path.join(default_root, "results_entity_judge", "lora"),
                         help="LoRA 训练输出目录")
+    # 可选：分别为 judge 与 decomposer 指定独立的输出目录（若不指定，将使用 --lora_out_dir 并在内部做默认分目录隔离）
+    parser.add_argument("--judge_lora_out_dir", default=None,
+                        help="(可选) 主判定LoRA的输出目录，覆盖 --lora_out_dir 的默认值")
+    parser.add_argument("--decomp_lora_out_dir", default=None,
+                        help="(可选) 分解器LoRA的输出目录，覆盖 --lora_out_dir 的默认值")
     parser.add_argument("--lora_adapter_dir", default=None, help="推理时加载的 LoRA 适配器目录")
+    # 小LLM 分解器相关（推理/训练均可用）
+    parser.add_argument("--enable_decomposer", action="store_true", default=False, help="启用：先用小LLM进行问题分解")
+    parser.add_argument("--decomp_lora_adapter_dir", default=None, help="分解器 LoRA 适配器目录（可选）")
+    parser.add_argument("--decomp_base_model_dir", default=None, help="分解器基座模型目录（默认与 base_model_dir 相同）")
 
     # 规则文档与训练数据
     parser.add_argument("--rules_md_path", default=None, help="规则文档（海天杯-技术资料.md）路径")
@@ -74,6 +83,9 @@ def main():
     # 训练后端：hf（Transformers+PEFT）或 llama-factory
     parser.add_argument("--train_backend", choices=["hf", "llama-factory"], default="hf",
                         help="选择训练后端：hf（内置 Transformers+PEFT）或 llama-factory（外部训练器）")
+    parser.add_argument("--train_task", choices=["judge", "decompose"], default="judge",
+                        help="训练任务：judge（规则学习）或 decompose（问题分解）")
+    parser.add_argument("--decomp_events_file", default=None, help="用于分解器训练的事件文本文件（每行一条）")
 
     # 推理（judge/stream-judge）
     parser.add_argument("--events_file", default=None, help="事件文本文件（每行一条，stream-judge 模式）")
@@ -81,6 +93,7 @@ def main():
     parser.add_argument("--no_vllm", action="store_true", default=False, help="禁用 vLLM，回退 transformers 推理")
     parser.add_argument("--batch_size", type=int, default=4, help="stream-judge 小批量大小")
     parser.add_argument("--simple_output", action="store_true", default=False, help="推理仅输出‘合规/冲突’，不带依据与建议")
+    parser.add_argument("--print_decomposition", action="store_true", default=False, help="在判定前打印分解器输出(JSON)")
 
     # 训练时动态拼接KG上下文（基于样本事件自动检索邻接）
     parser.add_argument("--no_augment_train_with_kg", action="store_true", default=False, help="禁用：为训练样本动态拼接KG上下文")
@@ -110,6 +123,8 @@ def main():
         default=os.environ.get("NEO4J_DATABASE", "neo4j"),
         help="Neo4j 数据库名称，默认 neo4j",
     )
+    # KG 控制
+    parser.add_argument("--skip_kg", action="store_true", default=False, help="推理时跳过连接/使用KG，仅离线文本模式")
 
     # 与 Exp_Basic 兼容的占位参数（最小化保留）
     parser.add_argument("--use_gpu", action="store_true", help="是否使用 GPU（可选）")
