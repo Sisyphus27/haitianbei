@@ -93,6 +93,24 @@ class Exp_main(Exp_Basic):
         if mode == 'train':
             # 读取训练超参
             fp16 = not bool(getattr(self.args, 'no_fp16', False))
+            train_backend = str(getattr(self.args, 'train_backend', 'hf') or 'hf').lower()
+            # 如选择 llama-factory，用其执行 LoRA 训练
+            if train_backend in ('llama-factory', 'llamafactory', 'lf'):
+                info = self.train_rules_lora_with_llamafactory(
+                    train_jsonl=getattr(self.args, 'train_jsonl', None),
+                    rules_md_path=getattr(self.args, 'rules_md_path', None),
+                    output_dir=getattr(self.args, 'lora_out_dir', self.lora_out_dir),
+                    num_train_epochs=int(getattr(self.args, 'num_train_epochs', 1)),
+                    learning_rate=float(getattr(self.args, 'learning_rate', 2e-5)),
+                    per_device_train_batch_size=int(getattr(self.args, 'per_device_train_batch_size', 1)),
+                    gradient_accumulation_steps=int(getattr(self.args, 'grad_accum_steps', 1)),
+                    max_seq_len=int(getattr(self.args, 'max_seq_len', 1024)),
+                    fp16=fp16,
+                )
+                print("\n=== Train Finished (LLaMA-Factory) ===")
+                print("adapter_dir :", info.get("adapter_dir"))
+                print("samples     :", info.get("samples"))
+                return info
             info = self.train_rules_lora(
                 train_jsonl=getattr(self.args, 'train_jsonl', None),
                 rules_md_path=getattr(self.args, 'rules_md_path', None),
@@ -529,6 +547,164 @@ class Exp_main(Exp_Basic):
 
         print(f"[TRAIN] LoRA 适配器已保存: {adapter_dir}")
         return {"adapter_dir": adapter_dir, "samples": len(samples)}
+
+    # ----------------------------
+    # 使用 LLaMA-Factory 进行 LoRA 训练（外部训练器）
+    # ----------------------------
+    def train_rules_lora_with_llamafactory(self,
+              train_jsonl: Optional[str] = None,
+              rules_md_path: Optional[str] = None,
+              output_dir: Optional[str] = None,
+              num_train_epochs: int = 1,
+              learning_rate: float = 2e-5,
+              per_device_train_batch_size: int = 1,
+              gradient_accumulation_steps: int = 8,
+              max_seq_len: int = 4096,
+              fp16: bool = True) -> dict:
+        """使用 LLaMA-Factory 执行 LoRA 训练，并将产物保存到 output_dir。
+
+        约定：
+        - 数据采用 Alpaca 格式（instruction/input/output）；若传入 rules_md_path 而无 JSONL，则自动生成占位样本。
+        - 依赖外部包 llamafactory（未安装则报错提示）。
+        - 通过 CLI 子进程调用：python -m llamafactory.cli train ...
+        """
+        import json as _json
+        import os as _os
+        import sys as _sys
+        import subprocess as _sp
+        from typing import List as _List
+
+        # 检查依赖
+        try:
+            import importlib.util as _ilu
+            if _ilu.find_spec("llamafactory") is None:
+                raise ImportError("llamafactory not installed")
+        except Exception:
+            raise RuntimeError(
+                "未检测到 LLaMA-Factory。请先在当前环境安装：pip install -U llama-factory"
+            )
+
+        # 准备样本：优先使用 JSONL；否则基于规则文档构造占位样本
+        samples = []
+        if train_jsonl and _os.path.isfile(train_jsonl):
+            try:
+                samples = load_instruction_jsonl(train_jsonl)
+            except Exception:
+                samples = []
+        if len(samples) == 0:
+            if not rules_md_path:
+                raise RuntimeError("未提供可用的训练数据（train_jsonl）或规则文档（rules_md_path）。")
+            samples = build_rules_sft_samples_from_md(rules_md_path, max_samples=50, chunk_chars=2000)
+
+        # 将样本写为 Alpaca JSON（list而非jsonl），便于 LLaMA-Factory 直接消费
+        out_dir = output_dir or self.lora_out_dir
+        data_dir = _os.path.join(out_dir, "llama_factory", "data")
+        _os.makedirs(data_dir, exist_ok=True)
+        data_file = _os.path.join(data_dir, "alpaca_sft.json")
+        # 为提升兼容性，补充 prompt/query/response 字段（映射自 instruction/input/output）
+        samples_out = []
+        for ex in samples:
+            ins = str(ex.get("instruction", "") or "")
+            inp = str(ex.get("input", "") or "")
+            out = str(ex.get("output", "") or "")
+            samples_out.append({
+                "instruction": ins,
+                "input": inp,
+                "output": out,
+                # 兼容某些版本的数据列命名
+                "prompt": ins,
+                "query": inp,
+                "response": out,
+            })
+        with open(data_file, 'w', encoding='utf-8') as f:
+            _json.dump(samples_out, f, ensure_ascii=False, indent=2)
+
+        # 写入 LLaMA-Factory 所需的数据集配置 dataset_info.json
+        ds_info_path = _os.path.join(data_dir, "dataset_info.json")
+        ds_info = {
+            "alpaca_sft": {
+                "file_name": "alpaca_sft.json",
+                "formatting": "alpaca",
+                # 明确列映射，尽量覆盖不同版本的键名
+                "columns": {
+                    "instruction": "instruction",
+                    "input": "input",
+                    "output": "output",
+                    "prompt": "prompt",
+                    "query": "query",
+                    "response": "response"
+                }
+            }
+        }
+        try:
+            with open(ds_info_path, 'w', encoding='utf-8') as f:
+                _json.dump(ds_info, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+        # 目标输出目录（LoRA 适配器会写在这里）
+        _os.makedirs(out_dir, exist_ok=True)
+
+        # 组装 LLaMA-Factory CLI 命令
+        cmd: _List[str] = [
+            _sys.executable, "-m", "llamafactory.cli", "train",
+            "--stage", "sft",
+            "--do_train",
+            "--model_name_or_path", self.base_model_dir,
+            "--finetuning_type", "lora",
+            # 数据集：通过 dataset_dir + dataset 名称（文件名不含扩展）
+            "--dataset_dir", data_dir,
+            "--dataset", "alpaca_sft",
+            # 训练超参
+            "--output_dir", out_dir,
+            "--num_train_epochs", str(int(num_train_epochs)),
+            "--per_device_train_batch_size", str(int(per_device_train_batch_size)),
+            "--learning_rate", str(float(learning_rate)),
+            "--cutoff_len", str(int(max_seq_len)),
+            "--gradient_accumulation_steps", str(int(gradient_accumulation_steps)),
+            # 常用保存/日志（适度）
+            "--save_steps", "200",
+            "--logging_steps", "20",
+            # 指定模板，减少自动解析不一致
+            "--template", "qwen",
+            "--overwrite_output_dir"
+        ]
+        # 精度/设备策略：
+        # - 若无GPU：不传 --fp16/--bf16，默认 float32，避免 "Your setup doesn't support bf16/gpu" 报错。
+        # - 若有GPU：fp16=True 则传 --fp16；否则在支持时传 --bf16，不支持则也不传。
+        try:
+            import torch as __torch
+            _has_cuda = __torch.cuda.is_available()
+            _bf16_ok = False
+            try:
+                _bf16_ok = bool(getattr(__torch.cuda, 'is_bf16_supported', lambda: False)())
+            except Exception:
+                # 兼容旧版：通过算力粗略判断（Ampere>=8.0 通常支持 bfloat16）
+                try:
+                    cc = __torch.cuda.get_device_capability(0) if _has_cuda else (0, 0)
+                    _bf16_ok = (cc[0] >= 8)
+                except Exception:
+                    _bf16_ok = False
+            if _has_cuda:
+                if fp16:
+                    cmd += ["--fp16"]
+                else:
+                    if _bf16_ok:
+                        cmd += ["--bf16"]
+                    # 否则不加精度开关，使用默认精度
+            # 无GPU：不添加精度开关（默认fp32）
+        except Exception:
+            # 回退：不设置精度开关
+            pass
+
+        print("[LLaMA-Factory] 开始训练：", " ".join(cmd))
+        # 运行子进程
+        proc = _sp.run(cmd, cwd=self.root)
+        if proc.returncode != 0:
+            raise RuntimeError("LLaMA-Factory 训练失败，请检查终端输出与环境依赖。")
+
+        print(f"[LLaMA-Factory] 训练完成。输出目录: {out_dir}")
+        return {"adapter_dir": out_dir, "samples": len(samples), "backend": "llama-factory"}
 
     def generate_with_vllm(self, prompts: List[str], lora_adapter_dir: Optional[str] = None,
                             max_tokens: int = 256, temperature: float = 0.2) -> List[str]:

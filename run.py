@@ -71,6 +71,10 @@ def main():
     parser.add_argument("--no_fp16", action="store_true", default=False, help="关闭fp16，改用bf16/float32")
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto", help="训练设备优先级：auto/cuda/cpu")
 
+    # 训练后端：hf（Transformers+PEFT）或 llama-factory
+    parser.add_argument("--train_backend", choices=["hf", "llama-factory"], default="hf",
+                        help="选择训练后端：hf（内置 Transformers+PEFT）或 llama-factory（外部训练器）")
+
     # 推理（judge/stream-judge）
     parser.add_argument("--events_file", default=None, help="事件文本文件（每行一条，stream-judge 模式）")
     parser.add_argument("--focus_entities", default=None, help="逗号分隔的关注实体，例如: 飞机A001,停机位14")
