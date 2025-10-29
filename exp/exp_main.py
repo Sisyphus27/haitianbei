@@ -167,8 +167,13 @@ class Exp_main(Exp_Basic):
                 print("[stream-judge] 需要 --events_file (每行一条事件)。示例:")
                 print("  python run.py --mode stream-judge --events_file tests/events_sample.txt --rules_md_path tests/rules_sample.txt")
                 return {"error": "missing_events_file"}
-        with open(events_file, 'r', encoding='utf-8') as f:
-            events = [ln.strip() for ln in f if ln.strip()]
+        # 统一通过 loader 读取事件：支持 .txt（每行一条）与 .jsonl（优先取 text/event/input 字段）
+        try:
+            events = load_events_from_file(events_file)
+        except Exception:
+            # 兜底：按纯文本逐行
+            with open(events_file, 'r', encoding='utf-8') as f:
+                events = [ln.strip() for ln in f if ln.strip()]
         rules_md_path = getattr(self.args, 'rules_md_path', None)
         lora_adapter_dir = getattr(self.args, 'lora_adapter_dir', None)
         use_vllm = not bool(getattr(self.args, 'no_vllm', False))
