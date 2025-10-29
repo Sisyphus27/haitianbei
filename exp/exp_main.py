@@ -169,7 +169,6 @@ class Exp_main(Exp_Basic):
                 return {"error": "missing_events_file"}
         with open(events_file, 'r', encoding='utf-8') as f:
             events = [ln.strip() for ln in f if ln.strip()]
-        focus = [s.strip() for s in str(getattr(self.args, 'focus_entities', '') or '').split(',') if s.strip()]
         rules_md_path = getattr(self.args, 'rules_md_path', None)
         lora_adapter_dir = getattr(self.args, 'lora_adapter_dir', None)
         use_vllm = not bool(getattr(self.args, 'no_vllm', False))
@@ -180,7 +179,6 @@ class Exp_main(Exp_Basic):
         count = 0
         for ev, out in self.stream_judge_conflicts(
             events_iter=events,
-            focus_entities=(focus or None),
             rules_md_path=rules_md_path,
             lora_adapter_dir=lora_adapter_dir,
             use_vllm=use_vllm,
