@@ -17,15 +17,20 @@ class RolloutWorker:
         self.epsilon = args.epsilon
         self.anneal_epsilon = args.anneal_epsilon
         self.min_epsilon = args.min_epsilon
-        if self.args.replay_dir != '':
-            self.save_path = self.args.result_dir + '/' + args.alg + '/' + args.map
+        if getattr(self.args, 'replay_dir', '') != '':
+            self.save_path = self.args.result_dir + '/' + \
+                args.alg + '/' + getattr(args, 'map', 'default')
             if not os.path.exists(self.save_path):
                 os.makedirs(self.save_path)
         print('Init RolloutWorker')
 
     def generate_episode(self, episode_num=None, evaluate=False):
+        """
+        返回:
+          episode, episode_reward, info["time"], win_tag, for_gantt, move_time, for_devices
+        其中 for_devices 与 for_gantt(=episodes_situation) 在长度和顺序上保持一一对应。
+        """
         # 开始收集与环境交互的情况
-        # 收集了8个东西：obs, action, reward, state, avail_action, action_onehot, 结束标志, padding
         o, u, r, s, avail_u, u_onehot, terminate, padded = [], [], [], [], [], [], [], []
         self.env.reset(self.n_agents)
         terminated = False
@@ -43,34 +48,44 @@ class RolloutWorker:
             if episode_num == 0:
                 epsilon = epsilon - self.anneal_epsilon if epsilon > self.min_epsilon else epsilon
 
-
+        # NEW: 始终保存“最后一次”info（即使未自然 terminated）
+        last_info = {"episodes_situation": [],
+                     "devices_situation": [], "time": 0.0}
         for_gantt = []
+        for_devices = None
+
         while not terminated and step < self.episode_limit:
-            # time.sleep(0.2)
-            obs = self.env.get_obs()  # [[],[],...]
-            state = self.env.get_state() # []
+            obs = self.env.get_obs()         # [n_agents, obs_dim]
+            state = self.env.get_state()     # [state_dim]
             actions, avail_actions, actions_onehot = [], [], []
-            
+
             # 选择动作
             for agent_id in range(self.n_agents):
-                avail_action = self.env.get_avail_agent_actions(agent_id)   # 获取该agent可用动作列表
-                action = self.agents.choose_action(obs[agent_id], last_action[agent_id], agent_id,
-                                                   avail_action, epsilon, evaluate)
+                avail_action = self.env.get_avail_agent_actions(
+                    agent_id)   # one-hot 可用动作
+                action = self.agents.choose_action(
+                    obs[agent_id], last_action[agent_id], agent_id,
+                    avail_action, epsilon, evaluate
+                )
 
-                if action < len(self.env.sites):  # 更新环境状态
+                # 提前占位，降低并发冲突
+                if action < len(self.env.sites):
                     self.env.has_chosen_action(action, agent_id)
 
-                # action的one-hot向量
+                # action 的 one-hot 向量
                 action_onehot = np.zeros(self.args.n_actions)
                 action_onehot[action] = 1
                 actions.append(action)
                 actions_onehot.append(action_onehot)
                 avail_actions.append(avail_action)
                 last_action[agent_id] = action_onehot
-            
-            # 进行一个step，获取总reward，是否结束，交互信息
+
+            # 环境前进一步
             reward, terminated, info = self.env.step(actions)
-            
+            # NEW: 记录“最后一次”info（保证达到 episode_limit 也有记录）
+            last_info = info
+
+            # 采样缓存
             o.append(obs)
             s.append(state)
             u.append(np.reshape(actions, [self.n_agents, 1]))
@@ -79,27 +94,37 @@ class RolloutWorker:
             r.append([reward])
             terminate.append([terminated])
             padded.append([0.])
+
             episode_reward += reward
             step += 1
-            # 更新epsilon
+
+            # 按 step 退火
             if self.args.epsilon_anneal_scale == 'step':
                 epsilon = epsilon - self.anneal_epsilon if epsilon > self.min_epsilon else epsilon
-            # 存储gantt的记录
-            if terminated:
-                for_gantt = info["episodes_situation"]
+
+            # NEW: 每步都更新 for_gantt/for_devices，循环结束后自然是“最后一次”
+            for_gantt = info.get("episodes_situation", [])
+            for_devices = info.get("devices_situation", None)
 
         win_tag = terminated
-        move_time = sum(job_trans[5] for job_trans in info["episodes_situation"])
-        move_time = move_time / self.n_agents
 
+        # 统计移动时间（每架飞机的平均移动分钟）
+        epi_sit = last_info.get("episodes_situation", [])
+        move_time = sum(job_trans[5]
+                        for job_trans in epi_sit) / max(1, self.n_agents)
 
         # last obs
+        # 注意：此处按原代码逻辑，把末尾的 obs/state 再补一帧
+        obs = self.env.get_obs()
+        state = self.env.get_state()
         o.append(obs)
         s.append(state)
+
         o_next = o[1:]
         s_next = s[1:]
         o = o[:-1]
         s = s[:-1]
+
         # get avail_action for last obs，because target_q needs avail_action in training
         avail_actions = []
         for agent_id in range(self.n_agents):
@@ -109,9 +134,9 @@ class RolloutWorker:
         avail_u_next = avail_u[1:]
         avail_u = avail_u[:-1]
 
-
+        # padding 到 episode_limit
         if step < self.episode_limit:
-            for i in range(step, self.episode_limit):
+            for _ in range(step, self.episode_limit):
                 o.append(np.zeros((self.n_agents, self.obs_shape)))
                 u.append(np.zeros([self.n_agents, 1]))
                 s.append(np.zeros(self.state_shape))
@@ -124,24 +149,27 @@ class RolloutWorker:
                 padded.append([1.])
                 terminate.append([1.])
 
-        episode = dict(o=o.copy(),
-                       s=s.copy(),
-                       u=u.copy(),
-                       r=r.copy(),
-                       avail_u=avail_u.copy(),
-                       o_next=o_next.copy(),
-                       s_next=s_next.copy(),
-                       avail_u_next=avail_u_next.copy(),
-                       u_onehot=u_onehot.copy(),
-                       padded=padded.copy(),
-                       terminated=terminate.copy()
-                       )
+        episode = dict(
+            o=o.copy(),
+            s=s.copy(),
+            u=u.copy(),
+            r=r.copy(),
+            avail_u=avail_u.copy(),
+            o_next=o_next.copy(),
+            s_next=s_next.copy(),
+            avail_u_next=avail_u_next.copy(),
+            u_onehot=u_onehot.copy(),
+            padded=padded.copy(),
+            terminated=terminate.copy()
+        )
         # add episode dim
         for key in episode.keys():
             episode[key] = np.array([episode[key]])
         if not evaluate:
             self.epsilon = epsilon
-        return episode, episode_reward, info["time"], win_tag, for_gantt , move_time
+
+        # CHANGED: 增加返回 for_devices
+        return episode, episode_reward, last_info.get("time", 0.0), win_tag, for_gantt, move_time, for_devices
 
 
 # RolloutWorker for communication
@@ -162,6 +190,10 @@ class CommRolloutWorker:
         print('Init CommRolloutWorker')
 
     def generate_episode(self, episode_num=None, evaluate=False):
+        """
+        返回:
+          episode, episode_reward, info["time"], win_tag, for_gantt, move_time, for_devices
+        """
         o, u, r, s, avail_u, u_onehot, terminate, padded = [], [], [], [], [], [], [], []
         self.env.reset(self.n_agents)
         terminated = False
@@ -170,33 +202,37 @@ class CommRolloutWorker:
         episode_reward = 0
         last_action = np.zeros((self.args.n_agents, self.args.n_actions))
         self.agents.policy.init_hidden(1)
-        
+
         epsilon = 0 if evaluate else self.epsilon
         if self.args.epsilon_anneal_scale == 'episode':
             epsilon = epsilon - self.anneal_epsilon if epsilon > self.min_epsilon else epsilon
         if self.args.epsilon_anneal_scale == 'epoch':
             if episode_num == 0:
                 epsilon = epsilon - self.anneal_epsilon if epsilon > self.min_epsilon else epsilon
-        
+
+        last_info = {"episodes_situation": [],
+                     "devices_situation": [], "time": 0.0}
         for_gantt = []
+        for_devices = None
+
         while not terminated and step < self.episode_limit:
-            # time.sleep(0.2)
             obs = self.env.get_obs()
             state = self.env.get_state()
             actions, avail_actions, actions_onehot = [], [], []
 
-            # get the weights of all actions for all agents
-            weights = self.agents.get_action_weights(np.array(obs), last_action)
+            # 获取所有智能体动作权重（通信策略）
+            weights = self.agents.get_action_weights(
+                np.array(obs), last_action)
 
             # choose action for each agent
             for agent_id in range(self.n_agents):
                 avail_action = self.env.get_avail_agent_actions(agent_id)
-                action = self.agents.choose_action(weights[agent_id], avail_action, epsilon, evaluate)
-                
-                if action < len(self.env.sites):  # 更新环境状态
+                action = self.agents.choose_action(
+                    weights[agent_id], avail_action, epsilon, evaluate)
+
+                if action < len(self.env.sites):  # 选择即占位
                     self.env.has_chosen_action(action, agent_id)
 
-                # generate onehot vector of th action
                 action_onehot = np.zeros(self.args.n_actions)
                 action_onehot[action] = 1
                 actions.append(action)
@@ -205,7 +241,8 @@ class CommRolloutWorker:
                 last_action[agent_id] = action_onehot
 
             reward, terminated, info = self.env.step(actions)
-            
+            last_info = info  # NEW
+
             o.append(obs)
             s.append(state)
             u.append(np.reshape(actions, [self.n_agents, 1]))
@@ -216,21 +253,32 @@ class CommRolloutWorker:
             padded.append([0.])
             episode_reward += reward
             step += 1
+
             if self.args.epsilon_anneal_scale == 'step':
                 epsilon = epsilon - self.anneal_epsilon if epsilon > self.min_epsilon else epsilon
-            if terminated:
-                for_gantt = info["episodes_situation"]
+
+            # NEW: 每步更新，循环后即最后一次
+            for_gantt = info.get("episodes_situation", [])
+            for_devices = info.get("devices_situation", None)
+
         win_tag = terminated
         print("step:", step)
-        move_time = sum(job_trans[5] for job_trans in info["episodes_situation"])
-        move_time = move_time / self.n_agents
+
+        epi_sit = last_info.get("episodes_situation", [])
+        move_time = sum(job_trans[5]
+                        for job_trans in epi_sit) / max(1, self.n_agents)
+
         # last obs
+        obs = self.env.get_obs()
+        state = self.env.get_state()
         o.append(obs)
         s.append(state)
+
         o_next = o[1:]
         s_next = s[1:]
         o = o[:-1]
         s = s[:-1]
+
         # get avail_action for last obs，because target_q needs avail_action in training
         avail_actions = []
         for agent_id in range(self.n_agents):
@@ -241,7 +289,7 @@ class CommRolloutWorker:
         avail_u = avail_u[:-1]
 
         if step < self.episode_limit:
-            for i in range(step, self.episode_limit):
+            for _ in range(step, self.episode_limit):
                 o.append(np.zeros((self.n_agents, self.obs_shape)))
                 u.append(np.zeros([self.n_agents, 1]))
                 s.append(np.zeros(self.state_shape))
@@ -254,22 +302,24 @@ class CommRolloutWorker:
                 padded.append([1.])
                 terminate.append([1.])
 
-        episode = dict(o=o.copy(),
-                       s=s.copy(),
-                       u=u.copy(),
-                       r=r.copy(),
-                       avail_u=avail_u.copy(),
-                       o_next=o_next.copy(),
-                       s_next=s_next.copy(),
-                       avail_u_next=avail_u_next.copy(),
-                       u_onehot=u_onehot.copy(),
-                       padded=padded.copy(),
-                       terminated=terminate.copy()
-                       )
+        episode = dict(
+            o=o.copy(),
+            s=s.copy(),
+            u=u.copy(),
+            r=r.copy(),
+            avail_u=avail_u.copy(),
+            o_next=o_next.copy(),
+            s_next=s_next.copy(),
+            avail_u_next=avail_u_next.copy(),
+            u_onehot=u_onehot.copy(),
+            padded=padded.copy(),
+            terminated=terminate.copy()
+        )
         # add episode dim
         for key in episode.keys():
             episode[key] = np.array([episode[key]])
         if not evaluate:
             self.epsilon = epsilon
 
-        return episode, episode_reward, info["time"], win_tag, for_gantt , move_time
+        # CHANGED: 增加返回 for_devices
+        return episode, episode_reward, last_info.get("time", 0.0), win_tag, for_gantt, move_time, for_devices

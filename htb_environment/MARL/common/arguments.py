@@ -22,14 +22,14 @@ def get_common_args():
     parser.add_argument('--learn', type=bool, default=True)
     parser.add_argument('--cuda', type=bool, default=True)
 
-    # —— 新增：先验与观测尾部填充 —— #
+    # 先验
     parser.add_argument('--replay_dir', type=str, default='')
     parser.add_argument('--use_prior', action='store_true', default=True)
     parser.add_argument('--prior_dim_site', type=int, default=8)
     parser.add_argument('--prior_dim_plane', type=int, default=3)
     parser.add_argument('--obs_pad', type=int, default=32)
 
-    # —— 新增：训练超参（设为 None，便于 mixin 时不覆盖 CLI） —— #
+    # 训练参数
     parser.add_argument('--n_epoch', type=int, default=None)
     parser.add_argument('--n_episodes', type=int, default=None)
     parser.add_argument('--train_steps', type=int, default=None)
@@ -40,7 +40,7 @@ def get_common_args():
     parser.add_argument('--target_update_cycle', type=int, default=None)
     parser.add_argument('--lr', type=float, default=None)
 
-    # —— 新增：探索率（兼容你传的名字） —— #
+    # 探索率
     parser.add_argument('--epsilon_start', type=float, default=None)
     parser.add_argument('--epsilon_end', type=float, default=None)
     parser.add_argument('--epsilon_anneal_steps', type=int, default=None)
@@ -81,12 +81,12 @@ def get_mixer_args(args):
         _setdefault('epsilon_anneal_scale', 'step')
 
     # loop
-    _setdefault('n_epoch', 15000)
+    _setdefault('n_epoch', 6)
     _setdefault('n_episodes', 5)
     _setdefault('train_steps', 2)
-    _setdefault('evaluate_cycle', 50)
+    _setdefault('evaluate_cycle', 5)
     _setdefault('batch_size', 32)
-    _setdefault('buffer_size', int(5e3))
+    _setdefault('buffer_size', int(5e2))
     _setdefault('save_cycle', 50)
     _setdefault('target_update_cycle', 200)
 

@@ -32,7 +32,7 @@ class Agents:
         return int(np.random.choice(idxs, 1, replace=False)[0])
 
 
-    def choose_action(self, obs, last_action, agent_num, avail_actions, epsilon, maven_z=None, evaluate=False):
+    def choose_action(self, obs, last_action, agent_num, avail_actions, epsilon, evaluate=False):
         inputs = obs.copy()
         agent_id = np.zeros(self.n_agents, dtype=np.float32)
         agent_id[agent_num] = 1.0
