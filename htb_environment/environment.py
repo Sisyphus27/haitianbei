@@ -870,9 +870,11 @@ class ScheduleEnv:
                         mv = "ZY_T"
 
                 plane.move_code = mv
-                if mv is not None:
+                cur_sid = None
+                if plane.current_site_id is not None and 0 <= plane.current_site_id < len(self.sites):
+                    cur_sid = self.sites[plane.current_site_id].site_id
+                if mv is not None and (cur_sid != site_to.site_id) and (float(move_min) > 1e-9):
                     jid = self.jobs_obj.code2id()[mv]
-                    # NEW: 移动在开始时刻入账，proc=0，move=move_min
                     self.episodes_situation.append(
                         (self.current_time, jid, site_to.site_id, pid, 0.0, float(move_min)))
                     self.episode_devices.append(

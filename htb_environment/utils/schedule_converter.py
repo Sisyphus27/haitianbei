@@ -91,7 +91,8 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
                                       plan_json_path: str,
                                       n_agent: int,
                                       out_dir: Optional[str] = None,
-                                      also_plot: bool = True):
+                                      also_plot: bool = True,
+                                      move_job_id: int = 1):
     """读取 info.json，选出“最佳”一组，生成 plan.json，并绘图（甘特 + 训练曲线）
        - out_dir 为空时，与 plan_json_path 同目录
     """
@@ -107,7 +108,12 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
 
     # 3) 转成官方规范的 plan.json
     #    统一排序：按 Time, Plane_ID
-    episodes_sorted = sorted(episodes, key=lambda x: (x[0], x[3]))
+    def _key(e):
+        t, jid, _, pid, _, _ = e
+        # 移动作业排在前面（相同时刻同飞机）
+        return(float(t), 0 if int(jid) == int(move_job_id) else 1, int(pid))
+    
+    episodes_sorted = sorted(episodes, key=_key)
     # per-plane 上一次 End_Site
     last_end: Dict[int, int] = {}
     plan: List[Dict[str, Any]] = []
@@ -138,7 +144,6 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
             _plot_gantt(plan, os.path.join(out_dir, "gantt.png"))
             _plot_metrics(info, out_dir, best_idx)
         except Exception as e:
-            # 绘图失败不影响主流程
             print(f"[schedule_converter] plotting failed: {e}")
 
 # --------- 甘特图 ---------

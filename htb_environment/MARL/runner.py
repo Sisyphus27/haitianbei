@@ -123,12 +123,20 @@ class Runner:
             sys.stdout.flush()
 
         # 保存 info.json + plan.json
+        print('\nFinal evaluation ...', end=' ')
+        win_rate, reward, time, move_time = self.evaluate()
+        print('Evaluate win_rate: {}, reward: {}, makespan: {}, move_times: {}'.format(
+            win_rate, reward, time, move_time))
         end_time = datetime.now()
         self.results["running_time"] = str(end_time - start_time)
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, indent=4, cls=NumpyEncoder)
+        try:
+            move_jid = int(self.env.jobs_obj.code2id().get("ZY_M", 1))
+        except Exception:
+            move_jid = 1
         convert_schedule_with_fixed_logic(
-            file_path, plan_path, self.args.n_agents)
+            file_path, plan_path, self.args.n_agents, move_job_id=move_jid)
 
     def export_schedule_csv(self, episodes_situation, devices=None, filename="schedule.csv"):
         os.makedirs(self.save_path, exist_ok=True)
@@ -180,8 +188,12 @@ class Runner:
         if self.args.load_model and not self.args.learn:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(self.results, f, indent=4, cls=NumpyEncoder)
+            try:
+                move_jid = int(self.env.jobs_obj.code2id().get("ZY_M", 1))
+            except Exception:
+                move_jid = 1
             convert_schedule_with_fixed_logic(
-                file_path, plan_path, self.args.n_agents)
+                file_path, plan_path, self.args.n_agents, move_job_id=move_jid)
 
         # 可选导出 CSV（取最后一组）
         if getattr(self.args, "export_csv", True) and len(self.results["schedule_results"]) > 0:
