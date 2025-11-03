@@ -13,25 +13,49 @@ class TaskGraph:
             j.predecessors) for j in jobs.jobs_object_list}
         self.mutex: Dict[str, Set[str]] = {
             j.code: set(j.mutex) for j in jobs.jobs_object_list}
-        self.any_pre: Dict[str, Set[str]] = {
-            "ZY01": [{"ZY_T"}, {"ZY_M"}],  # FIXME
-        }
+        self.any_pre: Dict[str, Set[str]] = {j.code: set(
+            getattr(j, "any_pre", [])) for j in jobs.jobs_object_list}
+        
+    def _deps_satisfied(self, code: str, finished: Set[str]) -> bool:
+        # 所有 pre 都完成，且（若定义了 any_pre）任一 any_pre 完成
+        if not self.pre.get(code, set()).issubset(finished):
+            return False
+        anyset = self.any_pre.get(code, set())
+        return True if not anyset else anyset.intersection(finished)
 
     def enabled(self, finished: Set[str], ongoing_mutex: Set[str]) -> List[Job]:
-        cand = []
+        """返回所有“入度为0且不触发互斥”的就绪作业"""
+        cand: List[Job] = []
         for j in self.jobs.jobs_object_list:
-            if j.code in finished:
+            c = j.code
+            if c in finished:              # 已完成
                 continue
-            if not self.pre[j.code].issubset(finished):
+            if j.group == "出场":          # 出场交由批次门控统一放行
                 continue
-            if j.code in self.any_pre:
-                groups = self.any_pre[j.code]
-                if not any(group.issubset(finished) for group in groups):
-                    continue
-            if self.mutex[j.code] & ongoing_mutex:
+            # 互斥：正在进行的互斥标签不允许再起
+            if self.mutex.get(c, set()).intersection(ongoing_mutex):
                 continue
-            cand.append(j)
+            if self._deps_satisfied(c, finished):
+                cand.append(j)
         return cand
+    
+    def pack_parallel(self, ready: List[Job], site_job_ids: Set[int]) -> List[Job]:
+        """
+        从就绪集里按“贪心”挑一组两两不互斥、且该站位能做的作业（并行执行）。
+        NOTE：这里不做复杂最大团搜索，先用贪心即可。
+        """
+        pack: List[Job] = []
+        used_mutex: Set[str] = set()
+        for j in ready:
+            j_id = self.jobs.code2id()[j.code]
+            if j_id not in site_job_ids:
+                continue
+            # 与已选包互不互斥
+            if self.mutex.get(j.code, set()).intersection(used_mutex):
+                continue
+            pack.append(j)
+            used_mutex.update(self.mutex.get(j.code, set()))
+        return pack
 
     def all_finished(self, finished: Set[str]) -> bool:
         return "ZY_F" in finished

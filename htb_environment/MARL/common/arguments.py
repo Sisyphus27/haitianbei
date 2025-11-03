@@ -81,14 +81,14 @@ def get_mixer_args(args):
         _setdefault('epsilon_anneal_scale', 'step')
 
     # loop
-    _setdefault('n_epoch', 60)
-    _setdefault('n_episodes', 8)
-    _setdefault('train_steps', 8)
+    _setdefault('n_epoch', 6)
+    _setdefault('n_episodes', 5)
+    _setdefault('train_steps', 2)
     _setdefault('evaluate_cycle', 5)
     _setdefault('batch_size', 32)
     _setdefault('buffer_size', 2000)
-    _setdefault('save_cycle', 100)
-    _setdefault('target_update_cycle', 150)
+    _setdefault('save_cycle', 50)
+    _setdefault('target_update_cycle', 200)
 
     # training misc
     _setdefault('grad_norm_clip', 10)

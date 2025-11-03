@@ -77,7 +77,7 @@ class Sites:
         for sid in (29, 30, 31):  # 修正：不能用 range(29,30,31)
             pos = positions[sid - 1]
             res_ids = runway_ids
-            res_num = [1] * len(res_ids)
+            res_num = [10**6] * len(res_ids)
             self.sites_object_list.append(
                 Site(site_id=sid, absolute_position=pos,
                      resource_ids_list=res_ids, resource_number=res_num, is_runway=True)
