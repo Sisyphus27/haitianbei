@@ -1,6 +1,7 @@
 # arguments.py
 
 import argparse
+import os
 
 
 def get_common_args():
@@ -46,6 +47,22 @@ def get_common_args():
     parser.add_argument('--epsilon_anneal_steps', type=int, default=None)
     parser.add_argument('--epsilon_anneal_scale', type=str,
                         default=None, choices=['step', 'episode', 'epoch'])
+    
+
+    # neo4j 连接参数（支持从 NEO4J_AUTH 解析）
+    parser.add_argument("--use_task1_kg", action="store_true",
+                        help="使用任务一的Dataset_KG作为先验，并在每个epoch回写三元组")
+    parser.add_argument("--prior_dim_site", type=int, default=8)
+    parser.add_argument("--prior_dim_plane", type=int, default=3)
+    parser.add_argument("--neo4j_uri", type=str,
+                        default=os.environ.get("NEO4J_URI"))
+    parser.add_argument("--neo4j_user", type=str,
+                        default=os.environ.get("NEO4J_USER"))
+    parser.add_argument("--neo4j_password", type=str,
+                        default=os.environ.get("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j_database", type=str,
+                        default=os.environ.get("NEO4J_DATABASE"))
+
 
     args = parser.parse_args()
     return args

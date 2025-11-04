@@ -153,7 +153,9 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
 def _job_color(job_id: int) -> str:
     """简单的 job 调色盘；可按你的 job_id→code 字典改进"""
     base = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc949',
-            '#af7aa1', '#ff9da7', '#9c755f', '#bab0ac']
+            '#af7aa1', '#ff9da7', '#9c755f', '#bab0ac', '#b6992d', '#a17c6b',
+            '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2',
+            '#7f7f7f', '#bcbd22', '#17becf', '#1f77b4', '#ff6b6b']
     return base[job_id % len(base)]
 
 

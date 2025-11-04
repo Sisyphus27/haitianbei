@@ -9,7 +9,7 @@ from MARL.agent.agent import Agents
 from MARL.common.rollout import RolloutWorker
 from MARL.common.replay_buffer import ReplayBuffer
 
-from kg_bridge import T1KGPriorAdapter, schedule_to_kg_triples  # NEW：使用任务一接口的适配器
+from pipeline.kg_bridge import T1KGPriorAdapter, schedule_to_kg_triples  # NEW：使用任务一接口的适配器
 from data_provider.data_loader import Dataset_KG  # NEW：直接导入任务一核心类
 from utils.schedule_converter import convert_schedule_with_fixed_logic
 
@@ -34,18 +34,18 @@ def _episodes_makespan(episodes_situation):
         return float("inf")
     return max((t + pmin + mmin) for (t, _, _, _, pmin, mmin) in episodes_situation)
 
-
+# LOG： 完整的 KG 闭环训练流程
 def run_kg_epoch_pipeline(args):
     """
     完整闭环：
-      1) 创建并连接任务一的 KG 客户端 Dataset_KG
-      2) 用 KG 构造先验适配器 T1KGPriorAdapter，并 attach 到环境
-      3) 标准 MARL 训练：rollout -> buffer -> agent.train
-      4) 选出本 epoch 最优/最后一组调度，转三元组 -> 调用任务一接口 update_with_triples 回写
-      5) 下一 epoch 自动使用更新后的图谱统计（先验随图谱变化）
+    1) 创建并连接任务一的 KG 客户端 Dataset_KG
+    2) 用 KG 构造先验适配器 T1KGPriorAdapter，并 attach 到环境
+    3) 标准 MARL 训练：rollout -> buffer -> agent.train
+    4) 选出本 epoch 最优/最后一组调度，转三元组 -> 调用任务一接口 update_with_triples 回写
+    5) 下一 epoch 自动使用更新后的图谱统计（先验随图谱变化）
     """
     save_path = os.path.join(args.result_dir, args.alg,
-                             f"{args.n_agents}_agents", args.result_name)
+                            f"{args.n_agents}_agents", args.result_name)
     os.makedirs(save_path, exist_ok=True)
     info_path = os.path.join(save_path, "info.json")
     plan_path = os.path.join(save_path, "plan.json")
@@ -57,9 +57,9 @@ def run_kg_epoch_pipeline(args):
         neo4j_uri=getattr(args, "neo4j_uri", os.environ.get("NEO4J_URI")),
         neo4j_user=getattr(args, "neo4j_user", os.environ.get("NEO4J_USER")),
         neo4j_password=getattr(args, "neo4j_password",
-                               os.environ.get("NEO4J_PASSWORD")),
+                            os.environ.get("NEO4J_PASSWORD")),
         neo4j_database=getattr(args, "neo4j_database",
-                               os.environ.get("NEO4J_DATABASE", None)),
+                            os.environ.get("NEO4J_DATABASE", None)),
     )
 
     # (2) —— 环境 + 先验（用任务一图谱）
@@ -67,7 +67,7 @@ def run_kg_epoch_pipeline(args):
     prior = T1KGPriorAdapter(
         kg, ds=args.prior_dim_site, dp=args.prior_dim_plane)
     env.attach_prior(prior, args.prior_dim_site,
-                     args.prior_dim_plane)  # 环境会在 get_obs 时融合先验
+                    args.prior_dim_plane)  # 环境会在 get_obs 时融合先验
 
     agents = Agents(args)
     rollout = RolloutWorker(env, agents, args)
@@ -97,7 +97,7 @@ def run_kg_epoch_pipeline(args):
             results["train_move_time"].append(move_time)
             episodes.append(episode)
 
-            # 选 makespan 最小的一组（你也可以换成“最后一组”或“回报最大一组”）
+            # 选 makespan 最小的一组
             ms = _episodes_makespan(for_gantt)
             if ms < best_ms:
                 best_ms, best_gantt, best_devices = ms, list(

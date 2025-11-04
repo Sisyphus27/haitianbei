@@ -8,6 +8,7 @@ import os
 # sys.path.append(dirname(dirname(abspath(__file__))))
 from MARL.runner import Runner
 from MARL.common.arguments import get_common_args, get_mixer_args
+from pipeline.pipeline import run_kg_epoch_pipeline
 from utils.PDRs.shortestDistence import SDrules
 from utils.knowledgeGraph_test import KGPrior
 import json
@@ -21,7 +22,16 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 # 强化学习决策函数，带入来自DRL的强化学习agent
 def marl_agent_wrapper():
     args = get_common_args()
-    args.alg = 'qmix'    
+    args.alg = 'qmix'
+
+    if getattr(args, "use_task1_kg", False):
+        # 指定先验维度（示例）
+        if not hasattr(args, "prior_dim_site"):
+            args.prior_dim_site = 8
+        if not hasattr(args, "prior_dim_plane"):
+            args.prior_dim_plane = 3
+        run_kg_epoch_pipeline(args)
+        return
 
     # 先构造带 args 的环境
     env = ScheduleEnv(args)

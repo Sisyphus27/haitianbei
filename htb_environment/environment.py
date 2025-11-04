@@ -245,7 +245,7 @@ class ScheduleEnv:
     def _eta_fixed_available(self, rtype: str, stand_id: int) -> float:
         now = self.current_time
         pools = [d for d in self.fixed_devices if d.rtype ==
-                 rtype and d.can_serve(stand_id)]
+                rtype and d.can_serve(stand_id)]
         if not pools:
             return float('inf')
         for d in pools:
@@ -260,41 +260,6 @@ class ScheduleEnv:
                     best = min(best, now + p.eta_proc_end)
         return best
 
-    # def _alloc_resources_for_job(self, job: Job, stand_id: int, plane: Plane) -> Tuple[bool, float, List[object]]:
-    #     need = job.required_resources
-    #     if not need:
-    #         return True, 0.0, []
-    #     selected, extra_wait = [], 0.0
-    #     # 固定设备优先
-    #     for rt in need:
-    #         fix = next((d for d in self.fixed_devices if d.rtype ==
-    #                    rt and d.can_serve(stand_id)), None)
-    #         selected.append(fix)
-    #     if all(h is not None for h in selected):
-    #         for h in selected:
-    #             h.in_use.add(plane.plane_id)
-    #         return True, 0.0, selected
-    #     # 移动设备最近可达
-    #     site_pos = self.sites[stand_id -
-    #                           1].absolute_position if 1 <= stand_id <= 31 else self.sites[stand_id].absolute_position
-    #     for idx, rt in enumerate(need):
-    #         if selected[idx] is not None:
-    #             continue
-    #         cands = [m for m in self.mobile_devices if m.rtype ==
-    #                  rt and m.locked_by is None]
-    #         if not cands:
-    #             return False, 0.0, []
-    #         best, best_eta = None, 1e9
-    #         for m in cands:
-    #             from_pos = self.sites[m.loc_stand -
-    #                                   1].absolute_position if 1 <= m.loc_stand <= 31 else site_pos
-    #             eta = m.eta_to_min(from_pos, site_pos, self.current_time)
-    #             if eta < best_eta:
-    #                 best_eta, best = eta, m
-    #         extra_wait = max(extra_wait, best_eta - self.current_time)
-    #         best.locked_by = plane.plane_id
-    #         selected[idx] = best
-    #     return True, extra_wait, selected
 
     def _alloc_resources_for_job(self, job: Job, stand_id: int, plane: Plane) -> Tuple[bool, float, List[object]]:
         """
@@ -419,7 +384,7 @@ class ScheduleEnv:
                 h.locked_by = None
                 h.loc_stand = stand_id
 
-    # ============ 先验 & obs/state 预留 ============
+    # ============ 先验 
     def attach_prior(self, prior, prior_dim_site=8, prior_dim_plane=3):
         self.prior = prior
         self.prior_dim_site = prior_dim_site
@@ -696,222 +661,9 @@ class ScheduleEnv:
                 break
 
     
-    # def step(self, actions: List[int]):
-    #     prev_evt_len = len(self.episodes_situation)
-
-    #     # 1) 先处理自动落地（外生事件），且本步落地后不再处理该机的动作
-    #     just_landed = [False] * len(self.planes)
-    #     for pid, plane in enumerate(self.planes):
-    #         if "ZY_Z" in plane.finished_codes:
-    #             continue
-    #         arr_t, rw = self.arrival_plan.get(pid, (0.0, 29))
-    #         if self.current_time >= arr_t and plane.status in ("IDLE",):
-    #             runway_idx = next(k for k, s in enumerate(
-    #                 self.sites) if s.site_id == rw)
-    #             plane.current_site_id = runway_idx
-    #             plane.position = self.sites[runway_idx].absolute_position.copy()
-    #             job = self.jobs_obj.get_job("ZY_Z")
-    #             proc_min = self._proc_time_minutes(
-    #                 job, plane, self.sites[runway_idx], self.sites[runway_idx])
-    #             plane.start_job(job, proc_min)
-    #             just_landed[pid] = True
-    #             # 注意：不在落地开始时写 last_leave_time_by_runway，释放时再写
-
-    #     # 2) 解析动作（仅对“已落地且未在本步刚落地”的飞机）
-    #     for pid, act in enumerate(actions):
-    #         plane: Plane = self.planes[pid]
-    #         if "ZY_Z" not in plane.finished_codes or just_landed[pid]:
-    #             continue  # 未落地或本步刚触发落地：本步不执行动作
-
-    #         if act < len(self.sites):
-    #             site_to: Site = self.sites[act]
-    #             speed_m_per_min = self._speed_m_per_min()
-    #             move_min = count_path_on_road(
-    #                 plane.position, site_to.absolute_position, speed_m_per_min)
-
-    #             mv = None
-    #             if site_to.is_runway:
-    #                 # 出场前应已解固（ZY_L），去跑道视作转运 ZY_T（牵引）
-    #                 if "ZY_L" in plane.finished_codes:
-    #                     mv = "ZY_T"
-    #             else:
-    #                 # 进场滑行/站间转运
-    #                 if ("ZY_Z" in plane.finished_codes) and ("ZY01" not in plane.finished_codes):
-    #                     mv = "ZY_M"
-    #                 elif ("ZY_L" in plane.finished_codes) and ("ZY01" not in plane.finished_codes):
-    #                     mv = "ZY_T"
-
-    #             plane.move_code = mv
-    #             plane.start_move(to_site_id=site_to.site_id - 1, move_min=move_min)
-    #         else:
-    #             pass
-
-    #     # 2) 推进
-    #     etas = []
-    #     for p in self.planes:
-    #         if p.status == "MOVING" and p.eta_move_end > 0:
-    #             etas.append(p.eta_move_end)
-    #         if p.status == "PROCESSING" and p.eta_proc_end > 0:
-    #             etas.append(p.eta_proc_end)
-    #     delta_t = min(etas) if etas else self.min_time_unit
-    #     self.last_dt = delta_t
-    #     self.current_time += delta_t
-
-    #     # 3) 到位&完工
-    #     for pid, plane in enumerate(self.planes):
-    #         site_cur = None
-    #         if plane.current_site_id is not None and 0 <= plane.current_site_id < len(self.sites):
-    #             site_cur = self.sites[plane.current_site_id]
-    #         site_pos = site_cur.absolute_position if site_cur is not None else None
-
-    #         # 推进 ETA
-    #         if plane.status == "MOVING":
-    #             plane.eta_move_end = max(0.0, plane.eta_move_end - delta_t)
-    #             if plane.eta_move_end == 0.0 and site_pos is not None:
-    #                 plane.position = site_pos
-
-    #         if plane.status == "PROCESSING":
-    #             plane.eta_proc_end = max(0.0, plane.eta_proc_end - delta_t)
-
-
-    #         # FIXME到位：尝试开工
-    #         # 到位：尝试开工（已在你的代码中定位到此块）
-    #         if plane.status == "MOVING" and plane.eta_move_end == 0.0 and site_cur is not None:
-    #             # 若打过移动标签，先记一条“移动事件”
-    #             if plane.move_code in ("ZY_M", "ZY_T"):
-    #                 jid = self.jobs_obj.code2id()[plane.move_code]
-    #                 self.episodes_situation.append((
-    #                     self.current_time, jid, site_cur.site_id, pid,
-    #                     0.0, float(plane.move_last_min)
-    #                 ))
-    #                 self.episode_devices.append({})
-    #                 plane.finished_codes.add(plane.move_code)
-    #             plane.move_code = None
-    #             plane.status = "IDLE"
-
-    #             # 【新增】二次占用拦截：若该站位刚被其他飞机抢占，则本步不再开工（避免同刻多机）
-    #             if (not site_cur.is_runway) and (self.stand_current_occupancy.get(site_cur.site_id) is not None):
-    #                 # 留在 IDLE，下一步再尝试
-    #                 continue
-
-    #             # 之后再走“挑作业+资源分配”的逻辑（你已有）
-    #             cand_jobs = self.task_obj.graph.enabled(plane.finished_codes, plane.ongoing_mutex) \
-    #                 if (self.enable_deps or self.enable_mutex) else self.task_obj.jobs.jobs_object_list[:1]
-    #             job_for_site = None
-    #             for j in cand_jobs:
-    #                 j_id = self.jobs_obj.code2id()[j.code]
-    #                 if j_id in site_cur.resource_ids_list:
-    #                     job_for_site = j
-    #                     break
-    #             if job_for_site is None:
-    #                 plane.status = "IDLE"
-    #             else:
-    #                 can, wait_min, handles = self._alloc_resources_for_job(
-    #                     job_for_site, site_cur.site_id, plane)
-    #                 if not can:
-    #                     plane.status = "IDLE"
-    #                 else:
-    #                     proc_min = self._proc_time_minutes(
-    #                         job_for_site, plane, site_cur, site_cur)
-    #                     proc_min = float(wait_min + proc_min)
-    #                     plane.start_job(job_for_site, proc_min)
-    #                     # 占用站位（仅停机位）
-    #                     self.stand_current_occupancy[site_cur.site_id] = pid
-    #                     if self.enable_long_occupy and job_for_site.code in ("ZY03", "ZY02"):
-    #                         if job_for_site.required_resources:
-    #                             plane.long_occupy.add(job_for_site.required_resources[0])
-    #                     plane._last_handles = handles
-
-
-    #         # 完工：释放
-    #         # environment.py -- 在完工释放处替换为如下结构（只示意关键几行）
-    #         if plane.status == "PROCESSING" and plane.eta_proc_end == 0.0:
-    #             job_code = plane.current_job_code
-    #             if job_code is None:
-    #                 # 防御：如果出现这种情况，直接退回空闲，避免 get_job(None)
-    #                 plane.status = "IDLE"
-    #                 plane.eta_proc_end = 0.0
-    #                 continue
-
-    #             job = self.jobs_obj.get_job(job_code)
-    #             if job.code == "ZY_L" and "ZY01" in plane.finished_codes:
-    #                 plane.finished_codes.discard("ZY01")
-    #             # 加油置满
-    #             if job.code == "ZY10":
-    #                 plane.fuel_percent = 100.0
-
-    #             job_id = self.jobs_obj.code2id()[job.code]
-    #             move_min = getattr(plane, "move_last_min", 0.0)
-    #             # self.episodes_situation.append((self.current_time, job_id, plane.current_site_id, pid,
-    #             #                                 float(max(job.time_span, 0.0)
-    #             #                                     if job.time_span > 0 else 0.0),
-    #             #                                 float(move_min)))
-    #             # FIXME
-    #             proc_min = float(getattr(plane, "proc_last_min", 0.0))
-    #             code = job.code
-    #             # environment.py :: 完工记录处（去掉 ZY_Z 特判）
-    #             site_id_for_record = (
-    #                 self.sites[plane.current_site_id].site_id
-    #                 if plane.current_site_id is not None else 1
-    #             )
-    #             self.episodes_situation.append((
-    #                 self.current_time, job_id, site_id_for_record, pid,
-    #                 proc_min, 0.0
-    #             ))
-
-    #             plane.proc_last_min = 0.0
-    #             plane.move_last_min = 0.0
-
-    #             # 释放设备
-    #             self._release_resources(getattr(plane, "_last_handles", None), plane,
-    #                                     plane.current_site_id+1 if plane.current_site_id is not None else 1)
-    #             plane._last_handles = None
-
-    #             # 清占用与离位（停机位才在占用表）
-    #             if plane.current_site_id is not None:
-    #                 sid = self.sites[plane.current_site_id].site_id
-    #                 if sid in self.stand_current_occupancy:     # 跑道(29..31)跳过
-    #                     self.stand_current_occupancy[sid] = None
-    #                     self.last_leave_time_by_stand[sid] = self.current_time
-    #                 if job.group == "出场" and sid in (29, 30, 31):
-    #                     self.last_leave_time_by_runway[sid] = self.current_time
-
-    #             # 完成作业（plane.finish_job 现已把状态设回 IDLE）
-    #             plane.finish_job(job)
-    #             if self.enable_long_occupy and job.code == "ZY15":
-    #                 plane.long_occupy.clear()
-
-    #             # 若该机已完成全流程，置 DONE（否则保持 IDLE）
-    #             if self.task_obj.graph.all_finished(plane.finished_codes):
-    #                 plane.status = "DONE"
-
-
-    #     # 4) 奖励与终止（此处只返回0；终局奖励在外部评估）
-    #     step_time_cost = getattr(self, "last_dt", self.min_time_unit)
-    #     reward = -0.1*step_time_cost
-    #     # 只统计本步新追加的事件
-    #     new_events = self.episodes_situation[prev_evt_len:]
-    #     for (_, job_id, _, _, _, _) in new_events:
-    #         code = self.jobs_obj.id2code()[job_id]
-    #         if code == "ZY_F":
-    #             reward += 10.0
-    #         elif code not in ("ZY_M", "ZY_T"):   # 移动不加分，防止“移动完成=作业完成”膨胀
-    #             reward += 1.0
-
-    #     terminated = all(p.status == "DONE" for p in self.planes)
-    #     if terminated:
-    #         makespan = self.current_time
-    #         reward += max(0.0, 200.0 - makespan)
-
-    #     info = {"episodes_situation": self.episodes_situation, "time": self.current_time}
-    #     for site, idx in self._solve_reserved:
-    #         site.resource_number[idx] += 1
-    #     self._solve_reserved.clear()
-    #     return reward, terminated, info
-    
     
     # 关键逻辑：解析动作→ETA推进→到位/开工/完工→释放/干涉时钟
-    # FIXME:核心step()
+    # LOG:核心step()
     def step(self, actions: List[int]):
         prev_evt_len = len(self.episodes_situation)
         inst_reward = 0.0

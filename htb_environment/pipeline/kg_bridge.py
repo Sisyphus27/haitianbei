@@ -4,11 +4,7 @@ from typing import List, Dict, Any, Optional
 import os
 import numpy as np
 
-# —— 来自任务一 —— #
-from data_provider.data_loader import Dataset_KG  # 直接复用任务一的核心类
-
-# =============== 先验适配器：把任务一的Dataset_KG包装成Env可用的Prior ===============
-
+from data_provider.data_loader import Dataset_KG  
 
 class T1KGPriorAdapter:
     """
@@ -48,7 +44,7 @@ class T1KGPriorAdapter:
             cnt_use_rw = sum(1 for (_, p, _) in ins if p == "使用跑道")
 
             tmp.append((sid, deg_in, deg_out, cnt_assign,
-                       cnt_arrive, cnt_use_rw))
+                    cnt_arrive, cnt_use_rw))
             totals["in"] += deg_in
             totals["out"] += deg_out
             totals["assign"] += cnt_assign
@@ -67,7 +63,6 @@ class T1KGPriorAdapter:
                 norm(car, totals["arrive"]),
                 norm(crw, totals["use_rw"]),
             ]
-            # 一个非常轻量的“容量提示”：把 env 传入的站位资源数做个归一
             try:
                 idx = site_ids.index(sid)
                 cap_sum = float(sum(site_caps[idx].values())) if isinstance(
@@ -86,7 +81,7 @@ class T1KGPriorAdapter:
 
         return np.stack(feats, axis=0)
 
-    # 飞机先验，示例：是否有当前停机位、是否使用过跑道、是否有历史分配记录
+    # 飞机先验，是否有当前停机位、是否使用过跑道、是否有历史分配记录
     def plane_prior(self, planes) -> np.ndarray:
         feats = []
         for p in planes:
@@ -114,7 +109,7 @@ class T1KGPriorAdapter:
         return np.stack(feats, axis=0)
 
 
-# =============== 调度→三元组：把任务二的甘特数据转成任务一的三元组 ===============
+# 把调度生成的数据转成三元组 ===============
 def schedule_to_kg_triples(for_gantt: List[tuple], env) -> List[tuple[str, str, str]]:
     """
     for_gantt: List[(time_min, job_id, site_id, plane_id, proc_min, move_min)]
