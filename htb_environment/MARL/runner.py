@@ -55,6 +55,9 @@ class Runner:
             "win_rates": [],
             "train_reward": [],
             "train_makespan": [],
+            "episodes_per_epoch": self.args.n_episodes,
+            "evaluate_cycle": self.args.evaluate_cycle,
+            "evaluate_epoch": self.args.evaluate_epoch,
             "train_move_time": [],
             "loss": []
         }
@@ -153,6 +156,8 @@ class Runner:
                 w.writerow([f"{t:.2f}", code, jid, sid, pid, f"{pmin:.2f}", f"{mmin:.2f}",
                             ";".join(map(str, dev.get("FixedDevices", []))), ";".join(map(str, dev.get("MobileDevices", [])))])
 
+    
+    
     def evaluate(self):
         file_path = os.path.join(self.save_path, "evaluate.json")
         plan_path = os.path.join(self.save_path, "plan_eval.json")
