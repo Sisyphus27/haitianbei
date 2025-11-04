@@ -1,6 +1,7 @@
 # arguments.py
 
 import argparse
+import os
 
 
 def get_common_args():
@@ -46,6 +47,22 @@ def get_common_args():
     parser.add_argument('--epsilon_anneal_steps', type=int, default=None)
     parser.add_argument('--epsilon_anneal_scale', type=str,
                         default=None, choices=['step', 'episode', 'epoch'])
+    
+
+    # neo4j 连接参数（支持从 NEO4J_AUTH 解析）
+    parser.add_argument("--use_task1_kg", action="store_true",
+                        help="使用任务一的Dataset_KG作为先验，并在每个epoch回写三元组")
+    parser.add_argument("--prior_dim_site", type=int, default=8)
+    parser.add_argument("--prior_dim_plane", type=int, default=3)
+    parser.add_argument("--neo4j_uri", type=str,
+                        default=os.environ.get("NEO4J_URI"))
+    parser.add_argument("--neo4j_user", type=str,
+                        default=os.environ.get("NEO4J_USER"))
+    parser.add_argument("--neo4j_password", type=str,
+                        default=os.environ.get("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j_database", type=str,
+                        default=os.environ.get("NEO4J_DATABASE"))
+
 
     args = parser.parse_args()
     return args
@@ -81,14 +98,14 @@ def get_mixer_args(args):
         _setdefault('epsilon_anneal_scale', 'step')
 
     # loop
-    _setdefault('n_epoch', 60)
-    _setdefault('n_episodes', 8)
-    _setdefault('train_steps', 8)
+    _setdefault('n_epoch', 5)
+    _setdefault('n_episodes', 5)
+    _setdefault('train_steps', 2)
     _setdefault('evaluate_cycle', 5)
     _setdefault('batch_size', 32)
-    _setdefault('buffer_size', 2000)
-    _setdefault('save_cycle', 100)
-    _setdefault('target_update_cycle', 150)
+    _setdefault('buffer_size', 1000)
+    _setdefault('save_cycle', 50)
+    _setdefault('target_update_cycle', 200)
 
     # training misc
     _setdefault('grad_norm_clip', 10)

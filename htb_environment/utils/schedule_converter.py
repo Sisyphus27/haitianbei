@@ -1,7 +1,7 @@
 # schedule_converter.py
 # 从 info.json 选出“最佳”一组 episodes_situation，生成 plan.json，并绘制甘特图与训练曲线
 import json
-import os
+import os, numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 import matplotlib.pyplot as plt
 
@@ -88,13 +88,13 @@ def _attach_devices_to_plan(plan, episodes, devices):
 
 
 def convert_schedule_with_fixed_logic(info_json_path: str,
-                                      plan_json_path: str,
-                                      n_agent: int,
-                                      out_dir: Optional[str] = None,
-                                      also_plot: bool = True,
-                                      move_job_id: int = 1):
+                                    plan_json_path: str,
+                                    n_agent: int,
+                                    out_dir: Optional[str] = None,
+                                    also_plot: bool = True,
+                                    move_job_id: int = 1):
     """读取 info.json，选出“最佳”一组，生成 plan.json，并绘图（甘特 + 训练曲线）
-       - out_dir 为空时，与 plan_json_path 同目录
+    - out_dir 为空时，与 plan_json_path 同目录
     """
     _ensure_dir(plan_json_path)
     out_dir = out_dir or os.path.dirname(plan_json_path) or "."
@@ -136,13 +136,14 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
 
     with open(plan_json_path, "w", encoding="utf-8") as f:
         json.dump({"plan": plan, "selected_group_index": best_idx, "criterion": criterion},
-                  f, ensure_ascii=False, indent=4)
+                f, ensure_ascii=False, indent=4)
 
     # 4) 绘图
     if also_plot:
         try:
             _plot_gantt(plan, os.path.join(out_dir, "gantt.png"))
             _plot_metrics(info, out_dir, best_idx)
+            _plot_makespan_progress(info, out_dir)
         except Exception as e:
             print(f"[schedule_converter] plotting failed: {e}")
 
@@ -152,7 +153,9 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
 def _job_color(job_id: int) -> str:
     """简单的 job 调色盘；可按你的 job_id→code 字典改进"""
     base = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc949',
-            '#af7aa1', '#ff9da7', '#9c755f', '#bab0ac']
+            '#af7aa1', '#ff9da7', '#9c755f', '#bab0ac', '#b6992d', '#a17c6b',
+            '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2',
+            '#7f7f7f', '#bcbd22', '#17becf', '#1f77b4', '#ff6b6b']
     return base[job_id % len(base)]
 
 
@@ -179,12 +182,12 @@ def _plot_gantt(plan: List[Dict[str, Any]], png_path: str):
             # 移动段（若 move_time > 0）画为浅色边框
             if r["move_time"] > 0:
                 ax.broken_barh([(t0, r["move_time"])], (y-0.35, 0.25),
-                               facecolors='none', edgecolors='#888', linewidth=1.2)
+                            facecolors='none', edgecolors='#888', linewidth=1.2)
                 t0 += r["move_time"]
             # 加工段（若 process_time > 0）用实心色块
             if r["process_time"] > 0:
                 ax.broken_barh([(t0, r["process_time"])],
-                               (y-0.2, 0.4), facecolors=_job_color(r["Job_ID"]))
+                            (y-0.2, 0.4), facecolors=_job_color(r["Job_ID"]))
         yticks.append(y)
         ylabels.append(f"Plane {pid}")
         y += 1
@@ -213,6 +216,53 @@ def _moving_avg(arr: List[float], k: int) -> List[float]:
         out.append(s / min(k, i+1))
     return out
 
+
+def _plot_makespan_progress(info: dict, out_dir: str):
+    train_ms = info.get("train_makespan") or []
+    eval_ms = info.get("evaluate_makespan") or []
+    if not train_ms:
+        return
+    epi_per_epoch = int(info.get("episodes_per_epoch") or 0) or None
+    eval_cycle = int(info.get("evaluate_cycle") or 0) or None
+    eval_epoch = int(info.get("evaluate_epoch") or 1)
+
+    x = np.arange(1, len(train_ms)+1)
+    y = np.asarray(train_ms, dtype=float)
+
+    # 运行最优与平滑
+    running_min = np.minimum.accumulate(y)
+    k = max(5, len(y)//50)
+    smooth = np.convolve(y, np.ones(k)/k, mode="same") if k > 1 else y
+
+    fig, ax = plt.subplots(figsize=(11, 4))
+    ax.plot(x, y, alpha=0.25, label="Train makespan (per episode)")
+    ax.plot(x, smooth, lw=2, label="Moving avg")
+    ax.plot(x, running_min, lw=2, ls="--", label="Best-so-far (running min)")
+
+    # 标记每次 evaluate 的位置，并叠加当次评估的最优 makespan
+    if epi_per_epoch and eval_cycle:
+        eval_marks = []
+        # 每 eval_cycle 个 epoch 评估一次，落在该 epoch 的结尾
+        for k_epoch in range(eval_cycle, (len(y)//epi_per_epoch)+1, eval_cycle):
+            eval_ep = k_epoch * epi_per_epoch
+            if eval_ep <= len(y):
+                eval_marks.append(eval_ep)
+        for ep in eval_marks:
+            ax.axvline(ep, color="gray", ls=":", lw=1, alpha=0.5)
+
+        if eval_ms:
+            xs = np.array(eval_marks[:len(eval_ms)], dtype=int)
+            ax.scatter(xs, eval_ms[:len(xs)], zorder=5, marker="o",
+                    label="Eval best makespan", s=25)
+
+    ax.set_title(
+        "Makespan progress (training trial-and-error → improved schedules)")
+    ax.set_xlabel("Training Episode")
+    ax.set_ylabel("Makespan (min)")
+    ax.legend(loc="best")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "makespan_progress.png"), dpi=160)
+    plt.close(fig)
 
 def _plot_metrics(info: Dict[str, Any], out_dir: str, best_idx: int):
     _ensure_dir(os.path.join(out_dir, "dummy"))
@@ -272,7 +322,7 @@ def _plot_metrics(info: Dict[str, Any], out_dir: str, best_idx: int):
         if win:
             ax2 = ax.twinx()
             ax2.plot(win, label="win_rate", linestyle='--',
-                     linewidth=1.0, color='#e15759')
+                    linewidth=1.0, color='#e15759')
             ax2.set_ylabel("Win Rate")
         ax.set_title("Evaluation Metrics")
         ax.set_xlabel("Evaluate Round")
