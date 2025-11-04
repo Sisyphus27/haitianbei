@@ -68,7 +68,7 @@ def random_agent_wrapper():
         }
     episodes = 100
     env = ScheduleEnv()
-    n_agents = 8
+    n_agents = 16
     env.reset(n_agents)
     env_info = env.get_env_info()
     episode_limit = env_info["episode_limit"]
