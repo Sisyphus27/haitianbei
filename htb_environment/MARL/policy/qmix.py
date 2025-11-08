@@ -6,6 +6,10 @@ from MARL.network.qmix_net import QMixNet
 
 class QMIX:
     def __init__(self, args):
+        # 设备选择：当 args.cuda=True 但本机不支持时，自动回退到 CPU
+        use_cuda_flag = bool(getattr(args, 'cuda', False)) and torch.cuda.is_available()
+        self.device = torch.device('cuda' if use_cuda_flag else 'cpu')
+        self.use_cuda = use_cuda_flag
         self.n_actions = args.n_actions
         self.n_agents = args.n_agents
         self.state_shape = args.state_shape
@@ -23,11 +27,11 @@ class QMIX:
         self.eval_qmix_net = QMixNet(args)  # 把agentsQ值加起来的网络
         self.target_qmix_net = QMixNet(args)
         self.args = args
-        if self.args.cuda:
-            self.eval_rnn.cuda()
-            self.target_rnn.cuda()
-            self.eval_qmix_net.cuda()
-            self.target_qmix_net.cuda()
+        # 将模型移动到目标设备
+        self.eval_rnn.to(self.device)
+        self.target_rnn.to(self.device)
+        self.eval_qmix_net.to(self.device)
+        self.target_qmix_net.to(self.device)
         self.model_dir = args.model_dir + '/' + args.alg + '/' + str(args.n_agents)+'_agents' + '/' + args.result_name
         # 如果存在模型则加载模型
         if self.args.load_model:
@@ -77,13 +81,13 @@ class QMIX:
 
         # 得到每个agent对应的Q值，维度为(episode个数, max_episode_len， n_agents， n_actions)
         q_evals, q_targets = self.get_q_values(batch, max_episode_len)
-        if self.args.cuda:
-            s = s.cuda()
-            u = u.cuda()
-            r = r.cuda()
-            s_next = s_next.cuda()
-            terminated = terminated.cuda()
-            mask = mask.cuda()
+        # 迁移到设备
+        s = s.to(self.device)
+        u = u.to(self.device)
+        r = r.to(self.device)
+        s_next = s_next.to(self.device)
+        terminated = terminated.to(self.device)
+        mask = mask.to(self.device)
         # 取每个agent动作对应的Q值，并且把最后不需要的一维去掉，因为最后一维只有一个值了
         # 这块如果报错runtime error的话，是因为由于瞎训练的，导致模型发散，从而使得在episode_limit里没有完成任务，从而导致提取的batch为0
         q_evals = torch.gather(q_evals, dim=3, index=u).squeeze(3)
@@ -152,11 +156,13 @@ class QMIX:
         q_evals, q_targets = [], []
         for transition_idx in range(max_episode_len):
             inputs, inputs_next = self._get_inputs(batch, transition_idx)  # inputs为当前transition_idx每个episode每个agent的 obs + last_action + agent_id 维度为(40,51)
-            if self.args.cuda:
-                inputs = inputs.cuda()
-                inputs_next = inputs_next.cuda()
-                self.eval_hidden = self.eval_hidden.cuda()
-                self.target_hidden = self.target_hidden.cuda()
+            # 输入与隐藏状态迁移到设备
+            inputs = inputs.to(self.device)
+            inputs_next = inputs_next.to(self.device)
+            if self.eval_hidden is not None:
+                self.eval_hidden = self.eval_hidden.to(self.device)
+            if self.target_hidden is not None:
+                self.target_hidden = self.target_hidden.to(self.device)
             q_eval, self.eval_hidden = self.eval_rnn(inputs, self.eval_hidden)  # inputs维度为(40,51)，得到的q_eval维度为(40,n_actions)
             q_target, self.target_hidden = self.target_rnn(inputs_next, self.target_hidden)
 
@@ -180,8 +186,8 @@ class QMIX:
 
     def init_hidden(self, episode_num):
         # 为每个episode中的每个agent都初始化一个eval_hidden、target_hidden
-        self.eval_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
-        self.target_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
+        self.eval_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim), device=self.device)
+        self.target_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim), device=self.device)
 
     def save_model(self, train_step):
         num = str(train_step // self.args.save_cycle)

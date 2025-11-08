@@ -2,33 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Train LoRA (LLaMA-Factory)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/run.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "--mode", "train",
-                "--train_backend", "llama-factory",
-                "--train_jsonl", "${workspaceFolder}/data_provider/sft_with_kg.jsonl",
-                "--rules_md_path", "${workspaceFolder}/tests/rules_sample.txt",
-                "--num_train_epochs", "1",
-                "--per_device_train_batch_size", "1",
-                "--learning_rate", "2e-5",
-                "--no_fp16",
-                "--grad_accum_steps", "1",
-                "--max_seq_len", "1024",
-                "--base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
-                "--lora_out_dir", "${workspaceFolder}/results_entity_judge/lora"
-            ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "envFile": "${workspaceFolder}/.env"
-        },
-        {
-            "name": "Train Judge LoRA (LLaMA-Factory)",
+            "name": "Train Judge LoRA",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/run.py",
@@ -49,13 +23,11 @@
                 "--base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
                 "--judge_lora_out_dir", "${workspaceFolder}/results_entity_judge/lora/judge"
             ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
+            "env": {"PYTHONPATH": "${workspaceFolder}"},
             "envFile": "${workspaceFolder}/.env"
         },
         {
-            "name": "Train Decomposer LoRA (LLaMA-Factory)",
+            "name": "Train Decomposer LoRA",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/run.py",
@@ -76,13 +48,31 @@
                 "--decomp_base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
                 "--decomp_lora_out_dir", "${workspaceFolder}/results_entity_judge/lora/decomposer"
             ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
+            "env": {"PYTHONPATH": "${workspaceFolder}"},
             "envFile": "${workspaceFolder}/.env"
         },
         {
-            "name": "Stream Judge + Decomposer (detailed)",
+            "name": "Train MARL",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--mode", "marl-train",
+                "--marl_n_agents", "8",
+                "--marl_n_epoch", "5",
+                "--marl_n_episodes", "5",
+                "--marl_train_steps", "2",
+                "--marl_evaluate_cycle", "5",
+                "--marl_result_name", "demo",
+                "--marl_result_dir", "${workspaceFolder}/htb_environment/result"
+            ],
+            "env": {"PYTHONPATH": "${workspaceFolder}"},
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Stream Judge (conflict flow demo)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/run.py",
@@ -90,130 +80,19 @@
             "cwd": "${workspaceFolder}",
             "args": [
                 "--mode", "stream-judge",
-                "--events_file", "${workspaceFolder}/tests/events_sample.txt",
-                "--rules_md_path", "${workspaceFolder}/tests/rules_sample.md",
+                "--events_file", "${workspaceFolder}/data_provider/train_texts_conflict_aug_limit100.jsonl",
+                "--rules_md_path", "${workspaceFolder}/tests/rules_sample.txt",
                 "--enable_decomposer",
                 "--print_decomposition",
-                "--no_vllm",
-                "--skip_kg",
-                "--batch_size", "2",
-                "--base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
-                "--decomp_base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
-                "--lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/judge",
-                "--decomp_lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/decomposer"
-            ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "envFile": "${workspaceFolder}/.env"
-        },
-        {
-            "name": "Stream Judge + Decomposer (simple)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/run.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "--mode", "stream-judge",
-                "--events_file", "${workspaceFolder}/tests/events_sample.txt",
-                "--rules_md_path", "${workspaceFolder}/tests/rules_sample.md",
-                "--enable_decomposer",
-                "--print_decomposition",
-                "--simple_output",
-                "--no_vllm",
-                "--skip_kg",
-                "--batch_size", "2",
-                "--base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
-                "--decomp_base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
-                "--lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/judge",
-                "--decomp_lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/decomposer"
-            ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "envFile": "${workspaceFolder}/.env"
-        },
-        {
-            "name": "Train LoRA (augment KG)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/run.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "--mode", "train",
-                "--train_jsonl", "${workspaceFolder}/data_provider/sft_with_kg.jsonl",
-                "--rules_md_path", "${workspaceFolder}/tests/rules_sample.txt",
-                "--num_train_epochs", "1",
-                "--per_device_train_batch_size", "1",
-                "--learning_rate", "2e-5",
-                "--no_fp16",
-                "--device", "cuda",
-                "--log_steps", "1",
-                "--grad_accum_steps", "1",
-                "--max_seq_len", "1024",
-                "--base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
-                "--lora_out_dir", "${workspaceFolder}/results_entity_judge/lora",
-                "--neo4j-uri", "bolt://localhost:8687",
-                "--neo4j-user", "neo4j",
-                "--neo4j-password", "Neo4jPass2025"
-            ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "envFile": "${workspaceFolder}/.env"
-        },
-        {
-            "name": "Train LoRA (no augment KG)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/run.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "--mode", "train",
-                "--train_jsonl", "${workspaceFolder}/data_provider/sft_with_kg.jsonl",
-                "--rules_md_path", "${workspaceFolder}/tests/rules_sample.txt",
-                "--num_train_epochs", "1",
-                "--per_device_train_batch_size", "1",
-                "--learning_rate", "2e-5",
-                "--no_fp16",
-                "--no_augment_train_with_kg",
-                "--device", "cuda",
-                "--log_steps", "1",
-                "--grad_accum_steps", "1",
-                "--max_seq_len", "1024",
-                "--base_model_dir", "${workspaceFolder}/models/Qwen3-4B",
-                "--lora_out_dir", "${workspaceFolder}/results_entity_judge/lora"
-            ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "envFile": "${workspaceFolder}/.env"
-        },
-        {
-            "name": "Stream Judge (simple output)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/run.py",
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "--mode", "stream-judge",
-                "--events_file", "${workspaceFolder}/tests/events_sample.txt",
-                "--rules_md_path", "${workspaceFolder}/tests/rules_sample.txt",
-                "--batch_size", "4",
-                "--simple_output",
+                "--batch_size", "1",
                 "--no_vllm",
                 "--neo4j-uri", "bolt://localhost:8687",
                 "--neo4j-user", "neo4j",
                 "--neo4j-password", "Neo4jPass2025",
-                "--lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/adapter"
+                "--lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/judge",
+                "--decomp_lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/decomposer"
             ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
+            "env": {"PYTHONPATH": "${workspaceFolder}"},
             "envFile": "${workspaceFolder}/.env"
         }
     ]

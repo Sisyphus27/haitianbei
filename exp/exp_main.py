@@ -21,6 +21,7 @@ from data_provider.data_loader import load_instruction_jsonl, build_rules_sft_sa
 from data_provider.data_loader import load_events_from_file  # type: ignore
 import os
 import json
+import shutil
 from typing import Optional
 from typing import List, Tuple
 import time as _time
@@ -77,6 +78,48 @@ class Exp_main(Exp_Basic):
         self.lora_out_dir = getattr(args, 'lora_out_dir', os.path.join(self.root, 'results_entity_judge', 'lora'))
         # 小LLM（问题分解）相关配置
         self.decomp_base_model_dir = getattr(args, 'decomp_base_model_dir', self.base_model_dir)
+        # KG 可视化输出目录与计数器
+        self.kg_vis_dir = os.path.join(self.root, 'results', 'kg_vis')
+        self.kg_vis_idx = 0
+        self.kg: Optional[Dataset_KG] = None
+        if not self.skip_kg:
+            try:
+                self.kg = Dataset_KG(
+                    self.root, load_data=False,
+                    neo4j_uri=self.neo4j_uri,
+                    neo4j_user=self.neo4j_user,
+                    neo4j_password=self.neo4j_password,
+                    neo4j_database=self.neo4j_database,
+                )
+                if self.reset_kg:
+                    try:
+                        self.kg.reset_graph(keep_fixed=True)
+                        print("[KG] (init) reset_graph 已执行，已清理历史动态关系，仅保留固定节点。")
+                    except Exception:
+                        pass
+                    # 清空旧的可视化目录
+                    try:
+                        if os.path.isdir(self.kg_vis_dir):
+                            for _f in os.listdir(self.kg_vis_dir):
+                                _fp = os.path.join(self.kg_vis_dir, _f)
+                                if os.path.isfile(_fp):
+                                    os.remove(_fp)
+                    except Exception:
+                        pass
+                # 确保目录存在
+                try:
+                    os.makedirs(self.kg_vis_dir, exist_ok=True)
+                except Exception:
+                    pass
+                # 初始快照
+                try:
+                    _snap = self.kg.graph_snapshot()
+                    print(f"[KG] (init) snapshot nodes={_snap.get('nodes_count')} edges={_snap.get('edges_count')}")
+                except Exception:
+                    pass
+            except Exception as _e:
+                print("[KG] 初始化失败，进入跳过模式：", _e)
+                self.kg = None
 
     def _build_model(self):
         """占位，满足基类在构造时的要求（torch 可选）。"""
@@ -90,14 +133,48 @@ class Exp_main(Exp_Basic):
             return DummyModel(), []
 
     def run(self):
-        """统一入口：根据 mode 执行 LoRA 训练或事件流冲突判定。"""
+        """统一入口：根据 mode 执行 LoRA/MARL 训练或事件流冲突判定。"""
+        import logging as _logging
         mode = getattr(self.args, 'mode', 'stream-judge')
+
+        # ============ 新增：MARL 训练入口（复用 htb_environment，无需修改其源码） ============
+        if mode == 'marl-train':
+            _logging.info("[MARL] 开始训练/评估 (mode=marl-train)")
+            info = self.train_marl(
+                use_task1_kg=bool(getattr(self.args, 'marl_use_task1_kg', False)),
+                n_agents=int(getattr(self.args, 'marl_n_agents', 8)),
+                result_dir=str(getattr(self.args, 'marl_result_dir', os.path.join(self.root, 'htb_environment', 'result'))),
+                result_name=str(getattr(self.args, 'marl_result_name', 'exp')),
+                n_epoch=int(getattr(self.args, 'marl_n_epoch', 5)),
+                n_episodes=int(getattr(self.args, 'marl_n_episodes', 5)),
+                train_steps=int(getattr(self.args, 'marl_train_steps', 2)),
+                evaluate_cycle=int(getattr(self.args, 'marl_evaluate_cycle', 5)),
+                evaluate_epoch=int(getattr(self.args, 'marl_evaluate_epoch', 20)),
+                batch_size=int(getattr(self.args, 'marl_batch_size', 32)),
+                buffer_size=int(getattr(self.args, 'marl_buffer_size', 1000)),
+                target_update_cycle=int(getattr(self.args, 'marl_target_update_cycle', 200)),
+                save_cycle=int(getattr(self.args, 'marl_save_cycle', 50)),
+                lr=float(getattr(self.args, 'marl_lr', 5e-4)),
+                cuda=bool(getattr(self.args, 'marl_cuda', True)),
+                use_prior=bool(getattr(self.args, 'marl_use_prior', True)),
+                prior_dim_site=int(getattr(self.args, 'marl_prior_dim_site', 8)),
+                prior_dim_plane=int(getattr(self.args, 'marl_prior_dim_plane', 3)),
+                obs_pad=int(getattr(self.args, 'marl_obs_pad', 32)),
+                export_csv=not bool(getattr(self.args, 'marl_no_export_csv', False)),
+                eval_only=bool(getattr(self.args, 'marl_eval_only', False)),
+            )
+            print("\n=== MARL Train Finished ===")
+            print("result_dir  :", info.get("result_dir"))
+            print("result_name :", info.get("result_name"))
+            print("use_task1_kg:", info.get("use_task1_kg"))
+            return info
 
         if mode == 'train':
             # 读取训练超参
             fp16 = not bool(getattr(self.args, 'no_fp16', False))
             train_backend = str(getattr(self.args, 'train_backend', 'hf') or 'hf').lower()
             train_task = str(getattr(self.args, 'train_task', 'judge') or 'judge').lower()
+            _logging.info(f"[TRAIN] backend={train_backend} task={train_task}")
             # 如选择 llama-factory，用其执行 LoRA 训练
             if train_backend in ('llama-factory', 'llamafactory', 'lf'):
                 if train_task in ('decompose', 'decomp'):
@@ -156,16 +233,17 @@ class Exp_main(Exp_Basic):
             return info
 
         # 默认：stream-judge
+        if mode != 'stream-judge':
+            return  # 已在上面返回
         events_file = getattr(self.args, 'events_file', None)
         # 若未显式提供，尝试回退到 tests/events_sample.txt
         if not events_file or not os.path.isfile(events_file):
             _default_ev = os.path.join(self.root, 'tests', 'events_sample.txt')
             if os.path.isfile(_default_ev):
-                print(f"[stream-judge] 未提供 --events_file，使用默认样例: {_default_ev}")
+                _logging.warning(f"[STREAM] 未提供 --events_file，使用默认样例: {_default_ev}")
                 events_file = _default_ev
             else:
-                print("[stream-judge] 需要 --events_file (每行一条事件)。示例:")
-                print("  python run.py --mode stream-judge --events_file tests/events_sample.txt --rules_md_path tests/rules_sample.txt")
+                _logging.error("[STREAM] 缺失 --events_file。示例: python run.py --mode stream-judge --events_file tests/events_sample.txt --rules_md_path tests/rules_sample.txt")
                 return {"error": "missing_events_file"}
         # 统一通过 loader 读取事件：支持 .txt（每行一条）与 .jsonl（优先取 text/event/input 字段）
         try:
@@ -180,7 +258,7 @@ class Exp_main(Exp_Basic):
         batch_size = max(1, int(getattr(self.args, 'batch_size', 4)))
         simple_output = bool(getattr(self.args, 'simple_output', False))
 
-        print("\n=== Stream Judge Start ===")
+        _logging.info("=== Stream Judge Start ===")
         count = 0
         for ev, out in self.stream_judge_conflicts(
             events_iter=events,
@@ -266,12 +344,23 @@ class Exp_main(Exp_Basic):
         if simple:
             instruction = (
                 "任务：判断以下事件是否与当前状态或规则冲突。\n"
-                "请仅输出一个词：‘合规’ 或 ‘冲突’。不需要解释或建议。\n"
+                "仅输出下列两者之一（不得包含任何额外文字/标点/代码块）：\n"
+                "合规\n"
+                "冲突\n"
             )
         else:
+            # 统一规范到单一 JSON，便于稳定解析
             instruction = (
                 "任务：判断以下事件是否与当前状态或规则冲突。\n"
-                "输出格式：先给出结论（合规/冲突），再给出1-3条依据，最后给出可操作建议。\n"
+                "请严格只输出一个 JSON 对象（不得包含示例、解释、或 Markdown 代码围栏）。\n"
+                "JSON Schema：\n"
+                "{\n"
+                "  \"compliance\": \"合规\" 或 \"冲突\",\n"
+                "  \"reasons\": [ { \"rule\": string, \"description\": string } ],  // 最多3条，若合规则可为空数组\n"
+                "  \"suggestion\": string  // 若合规则可写 \"无\"\n"
+                "}\n"
+                "注意：只能输出一个 JSON；不要输出示例 Schema、不要输出 ```json 代码块。\n"
+                "reasons 不得重复、不得虚构规则。\n"
             )
         parts = [rules_text, kg_text, "【事件】\n" + event_text, instruction]
         return "\n\n".join([p for p in parts if p])
@@ -287,12 +376,28 @@ class Exp_main(Exp_Basic):
             "notes": "仅围绕跑道/停机位/牵引三类冲突分解"
         }
         """
+        # 升级版分解指令：强调 JSON Schema、禁止幻觉、扩展规则类别并限制数量，便于后处理稳定解析
         instruction = (
-            "请将以下判冲突任务分解为结构化步骤，并只输出一个JSON对象：\n"
-            "- 第一步：提取关键实体（飞机/跑道/停机位/牵引车）。\n"
-            "- 第二步：匹配可能相关的规则要点（仅围绕‘跑道互斥’、‘停机位互斥’、‘牵引唯一’）。\n"
-            "- 第三步：基于当前KG状态列出潜在冲突点（用简短文本描述即可）。\n"
-            "不要输出多余解释或格式。"
+            "请分解以下‘航保作业冲突判定’任务，并严格只输出一个 JSON 对象(不得有额外文字/Markdown/前后缀)。\n"
+            "JSON 字段顺序与含义：\n"
+            "{\n"
+            "  \"entities\": [str,...],            // 事件文本中出现的关键实体，限定：飞机/跑道/停机位/牵引车；原样字符串；去重保持出现顺序；最多10个\n"
+            "  \"applicable_rules\": [str,...],    // 可能相关的规则要点精炼短句：涵盖互斥/占用/放行许可/依赖/状态一致性/转运约束/设备服务范围；每条≤40字；最多8条\n"
+            "  \"potential_conflicts\": [str,...], // 基于 KG 状态推测的潜在冲突（如：跑道Z 已被 飞机A001 占用；停机位14 与等待时间未满足）；最多5条；若无则空数组\n"
+            "  \"evidence\": [str,...],            // (可选) 每条冲突的支撑：KG 三元组或节点状态片段，如 ‘关系: 飞机A001 -[占用]-> 跑道Z’；可为空或缺省\n"
+            "  \"notes\": \"\"                  // 若 potential_conflicts 为空则填 \"none\"；否则留空字符串\n"
+            "}\n"
+            "步骤要求：\n"
+            "1. 抽取实体：仅事件文本出现的资源，不做语义合并，不虚构。\n"
+            "2. 规则匹配：不得复制整段原文，不得虚构未在规则文档/域知识中出现的要点；务必去重。\n"
+            "3. 冲突列举：仅在 KG 中存在占用/互斥/依赖未满足/等待时间未满足/设备服务范围不足/时序违法 时列出；否则 potential_conflicts=[] notes=\"none\"。\n"
+            "严格限制：\n"
+            "- 不输出最终 ‘合规/冲突’ 判定；仅做分解。\n"
+            "- 不生成除上述字段外的任何键；字段类型固定为数组或字符串。\n"
+            "- 不在 JSON 外输出解释、示例、分析。\n"
+            "- 不幻觉：KG 未提供证据的冲突不要编造。\n"
+            "- 所有数组元素为 UTF-8 可解析的单行字符串，不含制表符。\n"
+            "只输出合法 JSON，可被 Python json.loads() 解析。"
         )
         parts = [rules_text, kg_text, "【事件】\n" + event_text, instruction]
         return "\n\n".join([p for p in parts if p])
@@ -665,10 +770,10 @@ class Exp_main(Exp_Basic):
 
         # 将样本写为 Alpaca JSON（list而非jsonl），便于 LLaMA-Factory 直接消费
         out_dir = output_dir or self.lora_out_dir
-        # 若未显式区分目录，默认将分解器输出到 lora/decomposer，避免与判定任务互相覆盖
+        # 若未显式区分目录，默认将“判定任务”输出到 lora/judge，避免与分解器互相覆盖
         try:
             if (output_dir is None) or (os.path.abspath(output_dir) == os.path.abspath(self.lora_out_dir)):
-                out_dir = os.path.join(self.lora_out_dir, "decomposer")
+                out_dir = os.path.join(self.lora_out_dir, "judge")
         except Exception:
             pass
         data_dir = _os.path.join(out_dir, "llama_factory", "data")
@@ -978,7 +1083,8 @@ class Exp_main(Exp_Basic):
             except Exception as e:  # noqa: BLE001
                 print("[vLLM] 加载 LoRA 失败，忽略：", e)
 
-        sam = SamplingParams(max_tokens=max_tokens, temperature=temperature, stop=["\n\n【"],
+        # 增加 "```" 作为停止符，降低模型输出代码围栏的概率
+        sam = SamplingParams(max_tokens=max_tokens, temperature=temperature, stop=["\n\n【", "```"],
                               n=1)
         outs = llm.generate(prompts, sam)
         texts = []
@@ -988,6 +1094,82 @@ class Exp_main(Exp_Basic):
             else:
                 texts.append("")
         return texts
+
+    def _parse_judge_output(self, text: str) -> dict:
+        """解析判定输出，提取合规标签/JSON。
+
+        返回字典：{parsed: bool, compliance: str|None, reasons_len: int, raw: str}
+        规则：
+        1. 首选：提取最后一个可解析 JSON，对其中 compliance 字段进行判断。
+        2. 回退：若文本只包含单独的“合规”或“冲突”两字（去除空白），即视为解析成功。
+        3. 再回退：若在输出前 64 个字符中出现“合规/冲突/不冲突/无冲突”，按最早判定标签处理（容忍后续赘述）。
+        不直接用“字符串是否包含 冲突”来判定，避免指令/示例污染导致误触发。
+        """
+        import json as _json
+        import re as _re
+        res = {"parsed": False, "compliance": None, "reasons_len": 0, "raw": text or ""}
+        if not isinstance(text, str) or not text.strip():
+            return res
+        s = text.strip()
+        # 去掉常见的代码围栏
+        s = _re.sub(r"^```(?:json)?\s*", "", s)
+        s = _re.sub(r"```\s*$", "", s)
+
+        def _scan_last_json(t: str):
+            starts = [i for i, ch in enumerate(t) if ch == '{']
+            last_obj = None
+            for st in starts:
+                depth = 0
+                for j in range(st, len(t)):
+                    ch = t[j]
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0:
+                            frag = t[st:j+1]
+                            try:
+                                obj = _json.loads(frag)
+                                last_obj = obj
+                            except Exception:
+                                pass
+                            break
+            return last_obj
+
+        obj = _scan_last_json(s)
+        if isinstance(obj, dict):
+            comp = str(obj.get("compliance", "")).strip()
+            if comp in ("合规", "冲突"):
+                res["parsed"] = True
+                res["compliance"] = comp
+                rs = obj.get("reasons", [])
+                if isinstance(rs, list):
+                    res["reasons_len"] = len(rs)
+                return res
+
+        only = s.replace('\u3000', ' ').strip()
+        if only in ("合规", "冲突"):
+            res["parsed"] = True
+            res["compliance"] = only
+            return res
+
+        if ("不冲突" in s) or ("无冲突" in s):
+            res["parsed"] = True
+            res["compliance"] = "合规"
+            return res
+        # 进一步放宽：仅扫描前 64 字符，若出现单侧标签则采纳
+        head = s[:64]
+        # 若只出现“合规”而不出现“冲突”或出现“不冲突/无冲突” -> 合规
+        if ("不冲突" in head) or ("无冲突" in head) or ("合规" in head and "冲突" not in head):
+            res["parsed"] = True
+            res["compliance"] = "合规"
+            return res
+        # 若只出现“冲突”而不出现“合规” -> 冲突
+        if ("冲突" in head) and ("合规" not in head) and ("不冲突" not in head) and ("无冲突" not in head):
+            res["parsed"] = True
+            res["compliance"] = "冲突"
+            return res
+        return res
 
     def _generate_text(self, model_dir: str, prompts: List[str], *, lora_adapter_dir: Optional[str], use_vllm: bool,
                         max_tokens: int = 256, temperature: float = 0.2) -> List[str]:
@@ -1057,6 +1239,104 @@ class Exp_main(Exp_Basic):
         return outs
 
     # 删除单条 judge 接口，统一通过 stream_judge_conflicts/Exp_main.run 路由
+    def _marl_rectify_and_update_kg(self, kg: Dataset_KG, *, result_name_suffix: str = 'auto') -> None:
+        """检测到冲突时触发：优先用训练好的 MARL 模型进行一次评估并将最佳调度写回 KG；
+        若未找到模型则回退到一次极小步的 KG 闭环训练（1 epoch），同样会写回 KG。
+        同时不修改 htb_environment 源码。
+        """
+        import os as _os
+        import sys as _sys
+        from types import SimpleNamespace as _NS
+
+        # 保障 htb_environment 的导入优先级与 utils 绑定
+        try:
+            _htb_dir = os.path.join(self.root, 'htb_environment')
+            if _htb_dir not in _sys.path:
+                _sys.path.insert(0, _htb_dir)
+            else:
+                try:
+                    _sys.path.remove(_htb_dir)
+                except Exception:
+                    pass
+                _sys.path.insert(0, _htb_dir)
+            # 清掉顶层 utils 缓存并绑定到 htb_environment/utils
+            try:
+                for _k in list(_sys.modules.keys()):
+                    if _k == 'utils' or _k.startswith('utils.'):
+                        _sys.modules.pop(_k, None)
+            except Exception:
+                pass
+            try:
+                import types as _types, importlib.util as _ilu
+                _utils_dir = os.path.join(_htb_dir, 'utils')
+                if os.path.isdir(_utils_dir):
+                    _pkg = _types.ModuleType('utils')
+                    _pkg.__path__ = [_utils_dir]
+                    _sys.modules['utils'] = _pkg
+                    for _name in ('util', 'job', 'task', 'plane', 'site', 'knowledgeGraph_test', 'schedule_converter'):
+                        _file = os.path.join(_utils_dir, f"{_name}.py")
+                        if os.path.isfile(_file):
+                            _spec = _ilu.spec_from_file_location(f"utils.{_name}", _file)
+                            if _spec and _spec.loader:
+                                _mod = _ilu.module_from_spec(_spec)
+                                _spec.loader.exec_module(_mod)
+                                _sys.modules[f"utils.{_name}"] = _mod
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # 导入需要的组件
+        from htb_environment.environment import ScheduleEnv  # type: ignore
+        from htb_environment.MARL.runner import Runner  # type: ignore
+        from htb_environment.MARL.common.arguments import get_mixer_args  # type: ignore
+        from htb_environment.pipeline.kg_bridge import T1KGPriorAdapter, schedule_to_kg_triples  # type: ignore
+        from htb_environment.pipeline.pipeline import run_kg_epoch_pipeline  # type: ignore
+
+        _result_dir = os.path.join(self.root, 'htb_environment', 'result')
+        _model_dir = os.path.join(self.root, 'htb_environment', 'MARL', 'model')
+        rname = f"rectify_{result_name_suffix}"
+        args = _NS(
+            map='boatschedule', n_agents=int(getattr(self.args, 'marl_n_agents', 8)), seed=123,
+            alg='qmix', last_action=True, reuse_network=True, gamma=0.99,
+            optimizer='RMS', evaluate_epoch=int(getattr(self.args, 'marl_evaluate_epoch', 5)),
+            model_dir=_model_dir, result_dir=_result_dir, result_name=rname,
+            load_model=True, learn=False, cuda=bool(getattr(self.args, 'marl_cuda', True)),
+            replay_dir='', use_prior=True,
+            prior_dim_site=int(getattr(self.args, 'marl_prior_dim_site', 8)),
+            prior_dim_plane=int(getattr(self.args, 'marl_prior_dim_plane', 3)),
+            obs_pad=int(getattr(self.args, 'marl_obs_pad', 32)),
+            n_epoch=None, n_episodes=None, train_steps=None,
+            evaluate_cycle=None, batch_size=None, buffer_size=None, save_cycle=None,
+            target_update_cycle=None, lr=None,
+        )
+        args = get_mixer_args(args)
+
+        # 优先：评估已训练模型
+        try:
+            env = ScheduleEnv(args)
+            prior = T1KGPriorAdapter(kg, ds=args.prior_dim_site, dp=args.prior_dim_plane)
+            env.attach_prior(prior, args.prior_dim_site, args.prior_dim_plane)
+            runner = Runner(env, args)
+            _ = runner.evaluate()
+            if runner.results.get('schedule_results'):
+                gantt = runner.results['schedule_results'][-1]
+                triples = schedule_to_kg_triples(gantt, env)
+                kg.update_with_triples(triples)
+            return
+        except Exception:
+            # 兜底：一次极小步的 KG 闭环训练（内部会写回 KG）
+            try:
+                small = _NS(**vars(args))
+                small.learn = True
+                small.load_model = False
+                small.n_epoch = 1
+                small.n_episodes = 1
+                small.train_steps = 1
+                small.evaluate_cycle = None
+                run_kg_epoch_pipeline(small)
+            except Exception:
+                pass
 
     def stream_judge_conflicts(self,
                                events_iter,
@@ -1080,18 +1360,9 @@ class Exp_main(Exp_Basic):
         decomp_adapter = getattr(self.args, 'decomp_lora_adapter_dir', None)
         decomp_model_dir = getattr(self.args, 'decomp_base_model_dir', self.decomp_base_model_dir)
 
-        kg = None
-        if not self.skip_kg:
-            try:
-                kg = Dataset_KG(
-                    self.root, load_data=False,
-                    neo4j_uri=self.neo4j_uri,
-                    neo4j_user=self.neo4j_user,
-                    neo4j_password=self.neo4j_password,
-                    neo4j_database=self.neo4j_database,
-                )
-            except Exception:
-                kg = None
+        kg = self.kg  # 复用实例级 KG（跨批次累计状态）
+        _kg_vis_dir = self.kg_vis_dir
+        _kg_vis_idx = self.kg_vis_idx
 
         batch_events: List[str] = []
         batch_prompts: List[str] = []
@@ -1126,6 +1397,7 @@ class Exp_main(Exp_Basic):
             # 可选：先调用小LLM做问题分解
             decomp_text = None
             if use_decomposer:
+                # TODO: before training, using base model as default
                 try:
                     d_prompt = self._format_decompose_prompt(ev, rules_text, kg_text)
                     d_outs = self._generate_text(decomp_model_dir, [d_prompt], lora_adapter_dir=decomp_adapter, use_vllm=use_vllm,
@@ -1148,11 +1420,213 @@ class Exp_main(Exp_Basic):
                 outs = None
                 if use_vllm:
                     try:
-                        outs = self.generate_with_vllm(batch_prompts, lora_adapter_dir=lora_adapter_dir)
+                        outs = self.generate_with_vllm(batch_prompts, lora_adapter_dir=lora_adapter_dir, max_tokens=220, temperature=0.0)
                     except Exception as e:  # noqa: BLE001
                         print("[vLLM] 推理不可用或失败，自动回退到 transformers：", e)
                         outs = None
                 if outs is None:
+                    # 回退到 transformers 大模型可能在 Windows 上触发 1455（页面文件不足）。
+                    # 尝试大模型一次；若捕获 OSError/内存错误，则降级为“小模型 + simple 提示”。
+                    try:
+                        if transformers is None:
+                            raise RuntimeError("需要安装 transformers 或 vllm 进行推理")
+                        from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
+                        tok = AutoTokenizer.from_pretrained(self.base_model_dir, trust_remote_code=True, use_fast=False)
+                        if tok.pad_token is None:
+                            tok.pad_token = tok.eos_token
+                        mdl = AutoModelForCausalLM.from_pretrained(self.base_model_dir, trust_remote_code=True)
+                        try:
+                            import torch  # type: ignore
+                            device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
+                        except Exception:
+                            device_str = 'cpu'
+                        try:
+                            if device_str == 'cuda':
+                                mdl = getattr(mdl.__class__, 'cuda')(mdl)
+                            else:
+                                mdl = getattr(mdl.__class__, 'cpu')(mdl)
+                        except Exception:
+                            pass
+                        # 加载 LoRA 适配器（若提供）
+                        if lora_adapter_dir:
+                            try:
+                                from peft import PeftModel  # type: ignore
+                                mdl = PeftModel.from_pretrained(mdl, lora_adapter_dir)
+                                try:
+                                    if device_str == 'cuda' and hasattr(mdl, 'cuda'):
+                                        mdl = mdl.cuda()
+                                    elif hasattr(mdl, 'cpu'):
+                                        mdl = mdl.cpu()
+                                except Exception:
+                                    pass
+                            except Exception as _e:
+                                print("[infer] 加载 LoRA 适配器失败，改用基座模型：", _e)
+                        outs = []
+                        for p in batch_prompts:
+                            ids = tok(p, return_tensors='pt')
+                            try:
+                                moved = {}
+                                for k, v in ids.items():
+                                    if device_str == 'cuda':
+                                        moved[k] = getattr(v.__class__, 'cuda')(v)
+                                    else:
+                                        moved[k] = getattr(v.__class__, 'cpu')(v)
+                                ids = moved
+                            except Exception:
+                                pass
+                            gen = mdl.generate(**ids, max_new_tokens=256, do_sample=False)
+                            out = tok.decode(gen[0][ids['input_ids'].shape[1]:], skip_special_tokens=True)
+                            outs.append(out)
+                    except (OSError, MemoryError) as e:
+                        # 降级：使用小模型 + simple 提示，避免占用内存过高
+                        try:
+                            retry_prompts = []
+                            for ev_i in batch_events:
+                                # 构造精简上下文
+                                try:
+                                    _auto = []
+                                    try:
+                                        _tr = _extract_triples(ev_i)
+                                        for s, p, o in _tr:
+                                            for t in (s, o):
+                                                t = str(t).strip()
+                                                if t:
+                                                    _auto.append(t)
+                                    except Exception:
+                                        pass
+                                    if _auto:
+                                        _seen = set(); _focus = []
+                                        for x in _auto:
+                                            if x and x not in _seen:
+                                                _focus.append(x); _seen.add(x)
+                                    else:
+                                        _focus = None
+                                    _kg_txt = self._kg_text_context(kg, focus_entities=_focus) if (kg is not None) else "【KG状态】\n(离线模式，未加载图谱)"
+                                except Exception:
+                                    _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                retry_prompts.append(self._format_conflict_prompt_with_mode(ev_i, rules_text, _kg_txt, simple=True))
+                            outs = self._generate_text(self.decomp_base_model_dir, retry_prompts, lora_adapter_dir=None, use_vllm=use_vllm,
+                                                       max_tokens=16, temperature=0.0)
+                        except Exception:
+                            outs = [""] * len(batch_prompts)
+                # 若非 simple_output，则对无法解析的样本进行一次降级重试（simple 模式，仅输出“合规/冲突”）
+                if not simple_output:
+                    try:
+                        parsed_list = [self._parse_judge_output(o) for o in outs]
+                        retry_idx = [i for i, p in enumerate(parsed_list) if not bool(p.get('parsed'))]
+                        if retry_idx:
+                            retry_prompts: List[str] = []
+                            for i in retry_idx:
+                                ev_i = batch_events[i]
+                                # 复用当前KG快速构造 simple 提示
+                                try:
+                                    # 重新提取一次关注实体（与上文一致逻辑）
+                                    _auto: List[str] = []
+                                    try:
+                                        _tr = _extract_triples(ev_i)
+                                        for s, p, o in _tr:
+                                            for t in (s, o):
+                                                t = str(t).strip()
+                                                if t:
+                                                    _auto.append(t)
+                                    except Exception:
+                                        pass
+                                    if _auto:
+                                        _seen = set()
+                                        _focus = []
+                                        for x in _auto:
+                                            if x and x not in _seen:
+                                                _focus.append(x)
+                                                _seen.add(x)
+                                    else:
+                                        _focus = None
+                                    _kg_txt = self._kg_text_context(kg, focus_entities=_focus) if (kg is not None) else "【KG状态】\n(离线模式，未加载图谱)"
+                                except Exception:
+                                    _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                retry_prompts.append(self._format_conflict_prompt_with_mode(ev_i, rules_text, _kg_txt, simple=True))
+                            # 执行一次小步重试
+                            try:
+                                # simple 重试一律使用小模型，避免 4B 在 Windows 上触发内存问题
+                                re_outs = self._generate_text(self.decomp_base_model_dir, retry_prompts, lora_adapter_dir=None, use_vllm=use_vllm,
+                                                              max_tokens=16, temperature=0.0)
+                            except Exception:
+                                re_outs = [""] * len(retry_prompts)
+                            for j, idx in enumerate(retry_idx):
+                                if isinstance(re_outs, list) and j < len(re_outs) and re_outs[j]:
+                                    outs[idx] = re_outs[j]
+                    except Exception:
+                        pass
+                # 若 simple_output，仅保留首个“合规/冲突”标签
+                if simple_output:
+                    def _to_label(t: str) -> str:
+                        if not isinstance(t, str):
+                            return ""
+                        if "合规" in t:
+                            return "合规"
+                        if "冲突" in t:
+                            return "冲突"
+                        return t.strip().splitlines()[0] if t.strip() else ""
+                    outs = [_to_label(o) for o in outs]
+                # 逐条回传，并在判定后更新 KG（冲突 -> 触发 MARL 矫正并回写；否则按事件增量回写）
+                for e, o in zip(batch_events, outs):
+                    if kg is not None:
+                        parsed = self._parse_judge_output(o)
+                        # 日志：判定解析
+                        try:
+                            print(f"[JUDGE] compliance={parsed.get('compliance')} parsed={parsed.get('parsed')} reasons={parsed.get('reasons_len')}")
+                        except Exception:
+                            pass
+                        # KG 交叉验证：仅当 KG 也能给出冲突理由时才触发 MARL
+                        kg_reasons_cnt = 0
+                        try:
+                            _kg_chk = kg.check_event_conflicts(e) or {}
+                            _kg_rs = _kg_chk.get('reasons', []) or []
+                            kg_reasons_cnt = len(_kg_rs)
+                        except Exception:
+                            kg_reasons_cnt = 0
+                        try:
+                            print(f"[KGCHK] reasons={kg_reasons_cnt}")
+                        except Exception:
+                            pass
+                        is_conflict = bool(parsed.get('compliance') == '冲突' and kg_reasons_cnt > 0)
+                        if is_conflict:
+                            try:
+                                self._marl_rectify_and_update_kg(kg, result_name_suffix='auto')
+                            except Exception:
+                                # 兜底：若 MARL 失败，至少将事件本身回写
+                                try:
+                                    kg.extract_and_update(e)
+                                except Exception:
+                                    pass
+                        else:
+                            try:
+                                kg.extract_and_update(e)
+                            except Exception:
+                                pass
+                        # 每次更新后都导出一张 KG 可视化图片
+                        try:
+                            import time as __t
+                            _kg_vis_idx += 1
+                            ts = int(__t.time())
+                            out_png = os.path.join(_kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png")
+                            if hasattr(kg, 'export_png'):
+                                kg.export_png(out_png)
+                        except Exception:
+                            pass
+                    yield (e, o)
+                batch_events, batch_prompts = [], []
+
+        # 处理尾批
+        if batch_events:
+            outs = None
+            if use_vllm:
+                try:
+                    outs = self.generate_with_vllm(batch_prompts, lora_adapter_dir=lora_adapter_dir, max_tokens=220, temperature=0.0)
+                except Exception as e:  # noqa: BLE001
+                    print("[vLLM] 推理不可用或失败，自动回退到 transformers：", e)
+                    outs = None
+            if outs is None:
+                try:
                     if transformers is None:
                         raise RuntimeError("需要安装 transformers 或 vllm 进行推理")
                     from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
@@ -1172,16 +1646,15 @@ class Exp_main(Exp_Basic):
                             mdl = getattr(mdl.__class__, 'cpu')(mdl)
                     except Exception:
                         pass
-                    # 加载 LoRA 适配器（若提供）
                     if lora_adapter_dir:
                         try:
                             from peft import PeftModel  # type: ignore
                             mdl = PeftModel.from_pretrained(mdl, lora_adapter_dir)
                             try:
-                                if device_str == 'cuda' and hasattr(mdl, 'cuda'):
-                                    mdl = mdl.cuda()
-                                elif hasattr(mdl, 'cpu'):
-                                    mdl = mdl.cpu()
+                                if device_str == 'cuda':
+                                    mdl = getattr(mdl.__class__, 'cuda')(mdl)
+                                else:
+                                    mdl = getattr(mdl.__class__, 'cpu')(mdl)
                             except Exception:
                                 pass
                         except Exception as _e:
@@ -1202,86 +1675,80 @@ class Exp_main(Exp_Basic):
                         gen = mdl.generate(**ids, max_new_tokens=256, do_sample=False)
                         out = tok.decode(gen[0][ids['input_ids'].shape[1]:], skip_special_tokens=True)
                         outs.append(out)
-                # 若 simple_output，仅保留首个“合规/冲突”标签
-                if simple_output:
-                    def _to_label(t: str) -> str:
-                        if not isinstance(t, str):
-                            return ""
-                        if "合规" in t:
-                            return "合规"
-                        if "冲突" in t:
-                            return "冲突"
-                        return t.strip().splitlines()[0] if t.strip() else ""
-                    outs = [_to_label(o) for o in outs]
-                # 逐条回传，并在判定后更新 KG（流式推进）
-                if kg is not None:
-                    for e in batch_events:
+                except (OSError, MemoryError):
+                    # 降级：使用小模型 + simple 提示
+                    try:
+                        retry_prompts = []
+                        for ev_i in batch_events:
+                            try:
+                                _auto = []
+                                try:
+                                    _tr = _extract_triples(ev_i)
+                                    for s, p, o in _tr:
+                                        for t in (s, o):
+                                            t = str(t).strip()
+                                            if t:
+                                                _auto.append(t)
+                                except Exception:
+                                    pass
+                                if _auto:
+                                    _seen = set(); _focus = []
+                                    for x in _auto:
+                                        if x and x not in _seen:
+                                            _focus.append(x); _seen.add(x)
+                                else:
+                                    _focus = None
+                                _kg_txt = self._kg_text_context(kg, focus_entities=_focus) if (kg is not None) else "【KG状态】\n(离线模式，未加载图谱)"
+                            except Exception:
+                                _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                            retry_prompts.append(self._format_conflict_prompt_with_mode(ev_i, rules_text, _kg_txt, simple=True))
+                        outs = self._generate_text(self.decomp_base_model_dir, retry_prompts, lora_adapter_dir=None, use_vllm=use_vllm,
+                                                   max_tokens=16, temperature=0.0)
+                    except Exception:
+                        outs = [""] * len(batch_prompts)
+            # 若非 simple_output，则对无法解析的样本进行一次降级重试（simple 模式，仅输出“合规/冲突”）
+            if not simple_output:
+                try:
+                    parsed_list = [self._parse_judge_output(o) for o in outs]
+                    retry_idx = [i for i, p in enumerate(parsed_list) if not bool(p.get('parsed'))]
+                    if retry_idx:
+                        retry_prompts: List[str] = []
+                        for i in retry_idx:
+                            ev_i = batch_events[i]
+                            try:
+                                _auto: List[str] = []
+                                try:
+                                    _tr = _extract_triples(ev_i)
+                                    for s, p, o in _tr:
+                                        for t in (s, o):
+                                            t = str(t).strip()
+                                            if t:
+                                                _auto.append(t)
+                                except Exception:
+                                    pass
+                                if _auto:
+                                    _seen = set()
+                                    _focus = []
+                                    for x in _auto:
+                                        if x and x not in _seen:
+                                            _focus.append(x)
+                                            _seen.add(x)
+                                else:
+                                    _focus = None
+                                _kg_txt = self._kg_text_context(kg, focus_entities=_focus) if (kg is not None) else "【KG状态】\n(离线模式，未加载图谱)"
+                            except Exception:
+                                _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                            retry_prompts.append(self._format_conflict_prompt_with_mode(ev_i, rules_text, _kg_txt, simple=True))
                         try:
-                            kg.extract_and_update(e)
+                            re_outs = self._generate_text(self.decomp_base_model_dir, retry_prompts, lora_adapter_dir=None, use_vllm=use_vllm,
+                                                          max_tokens=16, temperature=0.0)
                         except Exception:
-                            pass
-                for e, o in zip(batch_events, outs):
-                    yield (e, o)
-                batch_events, batch_prompts = [], []
-
-        # 处理尾批
-        if batch_events:
-            outs = None
-            if use_vllm:
-                try:
-                    outs = self.generate_with_vllm(batch_prompts, lora_adapter_dir=lora_adapter_dir)
-                except Exception as e:  # noqa: BLE001
-                    print("[vLLM] 推理不可用或失败，自动回退到 transformers：", e)
-                    outs = None
-            if outs is None:
-                if transformers is None:
-                    raise RuntimeError("需要安装 transformers 或 vllm 进行推理")
-                from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
-                tok = AutoTokenizer.from_pretrained(self.base_model_dir, trust_remote_code=True, use_fast=False)
-                if tok.pad_token is None:
-                    tok.pad_token = tok.eos_token
-                mdl = AutoModelForCausalLM.from_pretrained(self.base_model_dir, trust_remote_code=True)
-                try:
-                    import torch  # type: ignore
-                    device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
-                except Exception:
-                    device_str = 'cpu'
-                try:
-                    if device_str == 'cuda':
-                        mdl = getattr(mdl.__class__, 'cuda')(mdl)
-                    else:
-                        mdl = getattr(mdl.__class__, 'cpu')(mdl)
+                            re_outs = [""] * len(retry_prompts)
+                        for j, idx in enumerate(retry_idx):
+                            if isinstance(re_outs, list) and j < len(re_outs) and re_outs[j]:
+                                outs[idx] = re_outs[j]
                 except Exception:
                     pass
-                if lora_adapter_dir:
-                    try:
-                        from peft import PeftModel  # type: ignore
-                        mdl = PeftModel.from_pretrained(mdl, lora_adapter_dir)
-                        try:
-                            if device_str == 'cuda':
-                                mdl = getattr(mdl.__class__, 'cuda')(mdl)
-                            else:
-                                mdl = getattr(mdl.__class__, 'cpu')(mdl)
-                        except Exception:
-                            pass
-                    except Exception as _e:
-                        print("[infer] 加载 LoRA 适配器失败，改用基座模型：", _e)
-                outs = []
-                for p in batch_prompts:
-                    ids = tok(p, return_tensors='pt')
-                    try:
-                        moved = {}
-                        for k, v in ids.items():
-                            if device_str == 'cuda':
-                                moved[k] = getattr(v.__class__, 'cuda')(v)
-                            else:
-                                moved[k] = getattr(v.__class__, 'cpu')(v)
-                        ids = moved
-                    except Exception:
-                        pass
-                    gen = mdl.generate(**ids, max_new_tokens=256, do_sample=False)
-                    out = tok.decode(gen[0][ids['input_ids'].shape[1]:], skip_special_tokens=True)
-                    outs.append(out)
             # 若 simple_output，仅保留首个“合规/冲突”标签
             if simple_output:
                 def _to_label(t: str) -> str:
@@ -1293,12 +1760,223 @@ class Exp_main(Exp_Basic):
                         return "冲突"
                     return t.strip().splitlines()[0] if t.strip() else ""
                 outs = [_to_label(o) for o in outs]
-            if kg is not None:
-                for e in batch_events:
+            if kg is not None and batch_events:
+                for e, o in zip(batch_events, outs):
+                    parsed = self._parse_judge_output(o)
                     try:
-                        kg.extract_and_update(e)
+                        print(f"[JUDGE] compliance={parsed.get('compliance')} parsed={parsed.get('parsed')} reasons={parsed.get('reasons_len')}")
                     except Exception:
                         pass
-            for e, o in zip(batch_events, outs):
-                yield (e, o)
+                    kg_reasons_cnt = 0
+                    try:
+                        _kg_chk = kg.check_event_conflicts(e) or {}
+                        _kg_rs = _kg_chk.get('reasons', []) or []
+                        kg_reasons_cnt = len(_kg_rs)
+                    except Exception:
+                        kg_reasons_cnt = 0
+                    try:
+                        print(f"[KGCHK] reasons={kg_reasons_cnt}")
+                    except Exception:
+                        pass
+                    is_conflict = bool(parsed.get('compliance') == '冲突' and kg_reasons_cnt > 0)
+                    if is_conflict:
+                        try:
+                            self._marl_rectify_and_update_kg(kg, result_name_suffix='auto')
+                        except Exception:
+                            try:
+                                kg.extract_and_update(e)
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            kg.extract_and_update(e)
+                        except Exception:
+                            pass
+                    # 可视化
+                    try:
+                        import time as __t
+                        _kg_vis_idx += 1
+                        ts = int(__t.time())
+                        out_png = os.path.join(_kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png")
+                        if hasattr(kg, 'export_png'):
+                            kg.export_png(out_png)
+                    except Exception:
+                        pass
+                    yield (e, o)
+        # 更新实例中的可视化计数器，便于后续继续追加
+        self.kg_vis_idx = _kg_vis_idx
     
+
+
+    # =====================================================================
+    # 新增：MARL 训练（复用 htb_environment，严禁修改其源码）
+    # =====================================================================
+    def train_marl(self,
+                   *,
+                   use_task1_kg: bool = False,
+                   n_agents: int = 8,
+                   result_dir: Optional[str] = None,
+                   result_name: str = 'exp',
+                   n_epoch: int = 5,
+                   n_episodes: int = 5,
+                   train_steps: int = 2,
+                   evaluate_cycle: int = 5,
+                   evaluate_epoch: int = 20,
+                   batch_size: int = 32,
+                   buffer_size: int = 1000,
+                   target_update_cycle: int = 200,
+                   save_cycle: int = 50,
+                   lr: float = 5e-4,
+                   cuda: bool = True,
+                   use_prior: bool = True,
+                   prior_dim_site: int = 8,
+                   prior_dim_plane: int = 3,
+                   obs_pad: int = 32,
+                   export_csv: bool = True,
+                   eval_only: bool = False) -> dict:
+        """在不修改 htb_environment 的前提下，直接复用其模块完成 MARL 训练/评估。"""
+        # 先确保优先搜索 htb_environment 下的 utils（避免被项目根目录下的 utils 覆盖）
+        try:
+            _htb_dir = os.path.join(self.root, 'htb_environment')
+            # 1) 将 htb_environment 放到 sys.path 最前
+            if _htb_dir not in _sys.path:
+                _sys.path.insert(0, _htb_dir)
+            else:
+                # 移到最前，确保优先级
+                try:
+                    _sys.path.remove(_htb_dir)
+                except Exception:
+                    pass
+                _sys.path.insert(0, _htb_dir)
+
+            # 2) 将项目根目录移到更靠后位置，降低与 htb_environment/utils 的冲突概率
+            _proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+            if _proj_root in _sys.path:
+                try:
+                    _sys.path.remove(_proj_root)
+                    _sys.path.append(_proj_root)
+                except Exception:
+                    pass
+
+            # 3) 主动清理已加载的顶层 'utils' 相关模块，避免被缓存占用
+            try:
+                for _k in list(_sys.modules.keys()):
+                    if _k == 'utils' or _k.startswith('utils.'):
+                        _sys.modules.pop(_k, None)
+            except Exception:
+                pass
+
+            # 4) 绑定一个指向 htb_environment/utils 的“合成”包，确保 from utils.xxx 导向正确位置
+            try:
+                import importlib.util as _ilu
+                import types as _types
+                _utils_dir = os.path.join(_htb_dir, 'utils')
+                if os.path.isdir(_utils_dir):
+                    _pkg = _types.ModuleType('utils')
+                    _pkg.__path__ = [_utils_dir]  # 作为包目录
+                    _sys.modules['utils'] = _pkg
+                    # 预加载关键子模块，避免后续再次落到顶层 utils
+                    for _name in ('util', 'job', 'task', 'plane', 'site', 'knowledgeGraph_test'):
+                        _file = os.path.join(_utils_dir, f"{_name}.py")
+                        if os.path.isfile(_file):
+                            _spec = _ilu.spec_from_file_location(f"utils.{_name}", _file)
+                            if _spec and _spec.loader:
+                                _mod = _ilu.module_from_spec(_spec)
+                                _spec.loader.exec_module(_mod)
+                                _sys.modules[f"utils.{_name}"] = _mod
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # 动态导入，避免非 MARL 场景的硬依赖
+        from types import SimpleNamespace as _NS
+        try:
+            from htb_environment.environment import ScheduleEnv  # type: ignore
+            from htb_environment.MARL.runner import Runner  # type: ignore
+            from htb_environment.MARL.common.arguments import get_mixer_args  # type: ignore
+            from htb_environment.pipeline.pipeline import run_kg_epoch_pipeline  # type: ignore
+            from htb_environment.utils.knowledgeGraph_test import KGPrior  # type: ignore
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"无法导入 htb_environment 组件，请确认路径与依赖可用：{e}")
+
+        # 组织参数对象（仿照 htb_environment 的 args 结构）
+        _result_dir = result_dir or os.path.join(self.root, 'htb_environment', 'result')
+        _model_dir = os.path.join(self.root, 'htb_environment', 'MARL', 'model')
+        args = _NS(
+            # 通用
+            map='boatschedule', n_agents=int(n_agents), seed=123,
+            alg='qmix', last_action=True, reuse_network=True, gamma=0.99,
+            optimizer='RMS', evaluate_epoch=int(evaluate_epoch),
+            model_dir=_model_dir, result_dir=_result_dir, result_name=str(result_name),
+            load_model=False, learn=not bool(eval_only), cuda=bool(cuda),
+            # 先验
+            replay_dir='', use_prior=bool(use_prior),
+            prior_dim_site=int(prior_dim_site), prior_dim_plane=int(prior_dim_plane),
+            obs_pad=int(obs_pad),
+            # 循环与缓冲
+            n_epoch=int(n_epoch), n_episodes=int(n_episodes), train_steps=int(train_steps),
+            evaluate_cycle=int(evaluate_cycle), batch_size=int(batch_size),
+            buffer_size=int(buffer_size), save_cycle=int(save_cycle),
+            target_update_cycle=int(target_update_cycle), lr=float(lr),
+            # ε-greedy（用默认 None 让 get_mixer_args 自动填充）
+            epsilon_start=None, epsilon_end=None, epsilon_anneal_steps=None,
+            epsilon_anneal_scale=None,
+            # 其他
+            use_task1_kg=bool(use_task1_kg),
+            export_csv=bool(export_csv),
+            # Neo4j 连接，用于 KG 模式
+            neo4j_uri=self.neo4j_uri, neo4j_user=self.neo4j_user,
+            neo4j_password=self.neo4j_password, neo4j_database=self.neo4j_database,
+        )
+
+        # KG 闭环：直接调用 htb_environment.pipeline
+        if use_task1_kg:
+            run_kg_epoch_pipeline(args)
+            return {
+                "use_task1_kg": True,
+                "result_dir": _result_dir,
+                "result_name": result_name,
+                "learn": not bool(eval_only),
+            }
+
+        # 纯 MARL（无 KG）：复用其环境与 Runner
+        # 先 attach mixer 缺省参数
+        args = get_mixer_args(args)
+
+        env = ScheduleEnv(args)
+        if bool(use_prior):
+            try:
+                prior = KGPrior(ds=int(prior_dim_site), dp=int(prior_dim_plane))
+                env.attach_prior(prior, int(prior_dim_site), int(prior_dim_plane))
+            except Exception:
+                # 忽略先验失败，继续
+                pass
+
+        # 初始化并同步维度
+        env.reset(args.n_agents)
+        info = env.get_env_info()
+        args.n_actions = int(info["n_actions"])  # type: ignore[attr-defined]
+        args.state_shape = int(info["state_shape"])  # type: ignore[attr-defined]
+        args.obs_shape = int(info["obs_shape"])  # type: ignore[attr-defined]
+        args.episode_limit = int(info["episode_limit"])  # type: ignore[attr-defined]
+
+        runner = Runner(env, args)
+        # 设备诊断：明确当前训练所用设备
+        try:
+            import torch as _torch  # type: ignore
+            _dev = getattr(runner.agents.policy, 'device', None)
+            print(f"[MARL] torch.cuda.is_available={_torch.cuda.is_available()} | args.cuda={args.cuda} | policy.device={_dev}")
+        except Exception:
+            pass
+        if bool(eval_only):
+            _wr, _r, _t, _mv = runner.evaluate()
+        else:
+            runner.run(args.alg)
+        return {
+            "use_task1_kg": False,
+            "result_dir": _result_dir,
+            "result_name": result_name,
+            "learn": not bool(eval_only),
+        }
+

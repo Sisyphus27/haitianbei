@@ -42,21 +42,26 @@ class Agents:
         if self.args.reuse_network:
             inputs = np.hstack((inputs, agent_id))
 
-        # hidden state
+        # hidden state（若未初始化，按单episode初始化）
+        if getattr(self.policy, 'eval_hidden', None) is None:
+            self.policy.init_hidden(episode_num=1)
+        assert self.policy.eval_hidden is not None
         hidden_state = self.policy.eval_hidden[:, agent_num, :]
 
         # to tensor
         inputs_t = torch.tensor(inputs, dtype=torch.float32).unsqueeze(0)
         avail_t = torch.tensor(avail_actions, dtype=torch.float32).unsqueeze(0)
 
-        if self.args.cuda:
-            inputs_t = inputs_t.cuda()
-            hidden_state = hidden_state.cuda()
-            avail_t = avail_t.cuda()
+        # 自适应设备：与策略保持一致
+        device = getattr(self.policy, 'device', torch.device('cpu'))
+        inputs_t = inputs_t.to(device)
+        hidden_state = hidden_state.to(device)
+        avail_t = avail_t.to(device)
 
         # 前向：返回当前 agent 的 Q 向量
-        q_value, self.policy.eval_hidden[:, agent_num, :] = self.policy.eval_rnn(
-            inputs_t, hidden_state)
+        q_value, new_hidden = self.policy.eval_rnn(inputs_t, hidden_state)
+        assert self.policy.eval_hidden is not None
+        self.policy.eval_hidden[:, agent_num, :] = new_hidden
         # q_value: [1, n_actions] or [n_actions]，统一成 [n_actions]
         q_value = q_value.squeeze(0)
 
@@ -79,6 +84,7 @@ class Agents:
         max_episode_len = 0
         # 获取这些episode中最大的结束step数
         for episode_idx in range(episode_num):
+            transition_idx = 0
             for transition_idx in range(self.args.episode_limit):
                 if terminated[episode_idx, transition_idx, 0] == 1:  # 如果episodelimit的长度内没有terminal==1，导致max_episode_len == 0
                     if transition_idx + 1 >= max_episode_len:

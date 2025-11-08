@@ -30,7 +30,6 @@ def data_provider(args, flag):
         drop_last = False
         batch_size = 1
         freq = args.freq
-        # TODO: Data = Dataset_Pred should be defined
         # Data = Dataset_Pred
     else:
         shuffle_flag = True

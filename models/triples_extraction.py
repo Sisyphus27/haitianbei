@@ -45,6 +45,7 @@ def _norm_datetime(s: str) -> str:
 
 
 def extract_triples(text: str) -> List[Triple]:
+	# TODO: 着陆跑道仍然被识别为跑道Z
 	"""基于正则与启发式的轻量三元组抽取。
 
 	规则覆盖要点：
