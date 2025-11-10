@@ -33,18 +33,48 @@ class QMIX:
         self.eval_qmix_net.to(self.device)
         self.target_qmix_net.to(self.device)
         self.model_dir = args.model_dir + '/' + args.alg + '/' + str(args.n_agents)+'_agents' + '/' + args.result_name
-        # 如果存在模型则加载模型
-        if self.args.load_model:
-            # print(self.model_dir)
-            if os.path.exists(self.model_dir + '/554_rnn_net_params.pkl'):
-                path_rnn = self.model_dir + '/554_rnn_net_params.pkl'
-                path_qmix = self.model_dir + '/554_qmix_net_params.pkl'
-                map_location = 'cuda:0' if self.args.cuda else 'cpu'
+        # 如果要求加载模型：更健壮的恢复逻辑
+        if getattr(self.args, 'load_model', False):
+            import glob
+            map_location = 'cuda:0' if getattr(self.args, 'cuda', False) else 'cpu'
+            # 优先使用明确指定的 step；否则自动寻找目录下最新的 *_rnn_net_params.pkl
+            step = getattr(self.args, 'load_step', None)
+            path_rnn, path_qmix = None, None
+            if step is not None:
+                cand_rnn = os.path.join(self.model_dir, f"{int(step)}_rnn_net_params.pkl")
+                cand_qm = os.path.join(self.model_dir, f"{int(step)}_qmix_net_params.pkl")
+                if os.path.exists(cand_rnn) and os.path.exists(cand_qm):
+                    path_rnn, path_qmix = cand_rnn, cand_qm
+            if path_rnn is None or path_qmix is None:
+                rnn_list = sorted(glob.glob(os.path.join(self.model_dir, "*_rnn_net_params.pkl")))
+                qm_list = sorted(glob.glob(os.path.join(self.model_dir, "*_qmix_net_params.pkl")))
+                if rnn_list and qm_list:
+                    # 取共同的最新编号
+                    def _num(p):
+                        base = os.path.basename(p).split('_')[0]
+                        try:
+                            return int(base)
+                        except Exception:
+                            return -1
+                    pairs = {}
+                    for p in rnn_list:
+                        pairs.setdefault(_num(p), [None, None])[0] = p
+                    for p in qm_list:
+                        pairs.setdefault(_num(p), [None, None])[1] = p
+                    ks = [k for k, (a, b) in pairs.items() if k >= 0 and a and b]
+                    if ks:
+                        best = max(ks)
+                        path_rnn, path_qmix = pairs[best]
+            if path_rnn and path_qmix:
                 self.eval_rnn.load_state_dict(torch.load(path_rnn, map_location=map_location))
                 self.eval_qmix_net.load_state_dict(torch.load(path_qmix, map_location=map_location))
                 print('Successfully load the model: {} and {}'.format(path_rnn, path_qmix))
             else:
-                raise Exception("No model!")
+                # 当未找到模型时：若严格模式则抛错，否则给出提示并从头初始化（不再中断调试）
+                if getattr(self.args, 'load_model_strict', False):
+                    raise FileNotFoundError(f"No checkpoint found under {self.model_dir}. You can set load_model_strict=False to auto-continue.")
+                else:
+                    print(f"[QMIX] No checkpoint found under {self.model_dir}, continue without loading.")
 
         # 让target_net和eval_net的网络参数相同
         self.target_rnn.load_state_dict(self.eval_rnn.state_dict())

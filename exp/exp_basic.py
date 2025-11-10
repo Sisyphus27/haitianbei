@@ -10,6 +10,7 @@ FilePath: haitianbei/exp/exp_basic.py
 import os
 import numpy as np
 from typing import Any, cast
+import logging as _logging
 
 # 使 torch 变为可选依赖：若不可用则走 CPU/空模型逻辑
 try:
@@ -51,13 +52,19 @@ class Exp_Basic(object):
                 os.environ["CUDA_VISIBLE_DEVICES"] = str(
                     self.args.gpu) if not self.args.use_multi_gpu else self.args.devices
                 device = torch.device('cuda:{}'.format(self.args.gpu))
-                print('Use GPU: cuda:{}'.format(self.args.gpu))
+                if not _logging.getLogger().handlers:
+                    _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+                _logging.info('Use GPU: cuda:{}'.format(self.args.gpu))
             else:
                 device = torch.device('cpu')
-                print('Use CPU')
+                if not _logging.getLogger().handlers:
+                    _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+                _logging.info('Use CPU')
             return device
         else:
-            print('Torch not available, fallback to CPU (no-ops)')
+            if not _logging.getLogger().handlers:
+                _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+            _logging.info('Torch not available, fallback to CPU (no-ops)')
             return 'cpu'
 
     def _get_data(self):

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import sys
+import logging as _logging
 import argparse
 
 
@@ -61,19 +62,21 @@ def main():
         raise RuntimeError(f"未从 {args.events_file} 读取到事件文本")
     if args.max_events is not None:
         events = list(events)[: max(0, int(args.max_events))]
-    print(f"[DATA] 事件条数: {len(events)}")
+    if not _logging.getLogger().handlers:
+        _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _logging.info(f"[DATA] 事件条数: {len(events)}")
 
     out_path = args.out_jsonl or os.path.join("data_provider", "sft_decompose.jsonl")
 
     samples = build_decomposition_samples_from_events(events, instruction=args.instruction)
     save_jsonl(samples, out_path)
 
-    print("[OUT] 写出:", out_path)
-    print("[OUT] 样本数:", len(samples))
+    _logging.info(f"[OUT] 写出: {out_path}")
+    _logging.info(f"[OUT] 样本数: {len(samples)}")
 
     if args.print_preview and len(samples) > 0:
         n = max(1, int(args.print_preview))
-        print("\n[PREVIEW] 仅展示前", n, "条 input/output（如乱码，请先 chcp 65001 或设置 UTF-8）：")
+        _logging.info(f"\n[PREVIEW] 仅展示前 {n} 条 input/output（如乱码，请先 chcp 65001 或设置 UTF-8）：")
         for i, s in enumerate(samples[:n], 1):
             inp = s.get("input", "")
             out = s.get("output", "")
@@ -81,10 +84,9 @@ def main():
                 inp = inp[:800] + "... (truncated)"
             if len(out) > 800:
                 out = out[:800] + "... (truncated)"
-            print(f"\n--- SAMPLE #{i} INPUT ---\n" + inp)
-            print(f"\n--- SAMPLE #{i} OUTPUT(JSON) ---\n" + out)
-
-    print("done.")
+            _logging.info(f"\n--- SAMPLE #{i} INPUT ---\n" + inp)
+            _logging.info(f"\n--- SAMPLE #{i} OUTPUT(JSON) ---\n" + out)
+    _logging.info("done.")
 
 
 if __name__ == "__main__":

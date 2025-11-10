@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 from typing import Iterable
+import logging as _logging
 
 from models.triples_extraction import extract_triples
 
@@ -49,7 +50,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     total = run(args.input, args.output)
-    print(f"Wrote {total} lines to {args.output}")
+    if not _logging.getLogger().handlers:
+        _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _logging.info(f"Wrote {total} lines to {args.output}")
 
 
 if __name__ == "__main__":

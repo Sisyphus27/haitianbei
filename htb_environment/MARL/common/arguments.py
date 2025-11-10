@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import logging
 
 
 def get_common_args():
@@ -69,6 +70,13 @@ def get_common_args():
 
 
 def get_mixer_args(args):
+    """补齐 QMIX 训练所需的缺省参数。
+
+    调试改进：统一 epsilon 逻辑，避免因为全部为 None 导致进入 else 分支时看起来像是"跳出"函数；
+    同时添加 DEBUG 日志，单步跟踪时更易观察。始终在函数末尾返回 args，不存在早退。
+    """
+    log = logging.getLogger('marl.args')
+
     def _setdefault(name, value):
         if getattr(args, name, None) is None:
             setattr(args, name, value)
@@ -80,22 +88,34 @@ def get_mixer_args(args):
     _setdefault('hyper_hidden_dim', 64)
     _setdefault('lr', 5e-4)
 
-    # epsilon
-    if args.epsilon_start is not None or args.epsilon_end is not None or args.epsilon_anneal_steps is not None:
-        eps = 1.0 if args.epsilon_start is None else args.epsilon_start
-        mine = 0.05 if args.epsilon_end is None else args.epsilon_end
-        steps = 50000 if args.epsilon_anneal_steps is None else args.epsilon_anneal_steps
-        args.epsilon = eps
-        args.min_epsilon = mine
-        args.anneal_epsilon = (eps - mine) / float(max(1, steps))
-        if getattr(args, 'epsilon_anneal_scale', None) is None:
-            args.epsilon_anneal_scale = 'step'
+    # ===== epsilon （统一逻辑，不分支早退） =====
+    any_provided = any(v is not None for v in (
+        getattr(args, 'epsilon_start', None),
+        getattr(args, 'epsilon_end', None),
+        getattr(args, 'epsilon_anneal_steps', None),
+    ))
+    if any_provided:
+        eps = 1.0 if getattr(args, 'epsilon_start', None) is None else args.epsilon_start
+        mine = 0.05 if getattr(args, 'epsilon_end', None) is None else args.epsilon_end
+        steps = 50000 if getattr(args, 'epsilon_anneal_steps', None) is None else args.epsilon_anneal_steps
     else:
-        _setdefault('epsilon', 1.0)
-        _setdefault('min_epsilon', 0.05)
-        _setdefault('anneal_epsilon',
-                    (args.epsilon - args.min_epsilon) / 50000.0)
-        _setdefault('epsilon_anneal_scale', 'step')
+        # 使用已有 (可能已经传入) 或缺省值
+        eps = getattr(args, 'epsilon', None)
+        if eps is None:
+            eps = 1.0
+        mine = getattr(args, 'min_epsilon', None)
+        if mine is None:
+            mine = 0.05
+        steps = 50000  # 未显式提供时使用缺省 anneal 步数
+    # 统一写回
+    args.epsilon = eps
+    args.min_epsilon = mine
+    args.anneal_epsilon = (eps - mine) / float(max(1, steps))
+    if getattr(args, 'epsilon_anneal_scale', None) is None:
+        args.epsilon_anneal_scale = 'step'
+    log.debug(
+        f"[ARGS] epsilon_start={getattr(args,'epsilon_start',None)} epsilon_end={getattr(args,'epsilon_end',None)} steps={getattr(args,'epsilon_anneal_steps',None)} -> epsilon={args.epsilon:.4f} min={args.min_epsilon:.4f} anneal={args.anneal_epsilon:.8f} scale={args.epsilon_anneal_scale} provided={any_provided}"
+    )
 
     # loop
     _setdefault('n_epoch', 5)
@@ -109,4 +129,7 @@ def get_mixer_args(args):
 
     # training misc
     _setdefault('grad_norm_clip', 10)
+    log.debug(
+        f"[ARGS] loop defaults: n_epoch={args.n_epoch} n_episodes={args.n_episodes} train_steps={args.train_steps} batch_size={args.batch_size} buffer_size={args.buffer_size}"
+    )
     return args

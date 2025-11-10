@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import os
 import sys
+import logging as _logging
 import argparse
 
 
@@ -101,8 +102,10 @@ def main():
         if not os.path.isfile(src):
             raise FileNotFoundError(src)
         out_path = args.out_jsonl or os.path.join("data_provider", "sft_from_triples.jsonl")
-        print("[TRIPLES] 源:", src)
-        print("[TRIPLES] 模式:", args.negative_mode, " include_positive=", (not args.no_positive))
+        if not _logging.getLogger().handlers:
+            _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        _logging.info(f"[TRIPLES] 源: {src}")
+        _logging.info(f"[TRIPLES] 模式: {args.negative_mode}  include_positive={not args.no_positive}")
         samples = build_samples_from_train_triples(
             src,
             include_positive=(not args.no_positive),
@@ -111,17 +114,17 @@ def main():
             instruction=args.instruction,
         )
         save_jsonl(samples, out_path)
-        print("[OUT] 写出:", out_path)
-        print("[OUT] 样本数:", len(samples))
+        _logging.info(f"[OUT] 写出: {out_path}")
+        _logging.info(f"[OUT] 样本数: {len(samples)}")
         if args.print_preview and len(samples) > 0:
             n = max(1, int(args.print_preview))
-            print("\n[PREVIEW] 仅展示前", n, "条 input（如出现乱码，请先在 PowerShell 执行 chcp 65001 或设置 $OutputEncoding 为 UTF-8）：")
+            _logging.info(f"\n[PREVIEW] 仅展示前 {n} 条 input（如出现乱码，请先在 PowerShell 执行 chcp 65001 或设置 $OutputEncoding 为 UTF-8）：")
             for i, s in enumerate(samples[:n], 1):
                 inp = s.get("input", "")
                 if len(inp) > 1000:
                     inp = inp[:1000] + "... (truncated)"
-                print(f"\n--- SAMPLE #{i} INPUT ---\n" + inp)
-        print("done.")
+                _logging.info(f"\n--- SAMPLE #{i} INPUT ---\n" + inp)
+        _logging.info("done.")
         return
 
     # 模式A（events + KG 上下文）
@@ -141,7 +144,9 @@ def main():
         if p:
             args.neo4j_password = p
 
-    print("[KG] connecting:", args.neo4j_uri)
+    if not _logging.getLogger().handlers:
+        _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _logging.info(f"[KG] connecting: {args.neo4j_uri}")
     kg = None
     try:
         kg = Dataset_KG(
@@ -154,7 +159,7 @@ def main():
         )
     except Exception as e:
         if args.allow_offline:
-            print("[KG] 连接失败，进入离线模式：", e)
+            _logging.warning(f"[KG] 连接失败，进入离线模式：{e}")
             kg = None
         else:
             raise
@@ -162,7 +167,7 @@ def main():
     events = load_events_from_file(args.events_file)
     if not events:
         raise RuntimeError(f"未从 {args.events_file} 读取到事件文本")
-    print(f"[DATA] 事件条数: {len(events)}")
+    _logging.info(f"[DATA] 事件条数: {len(events)}")
 
     out_path = args.out_jsonl or os.path.join("data_provider", "sft_with_kg.jsonl")
     samples = build_kg_sft_samples_from_events(
@@ -174,18 +179,18 @@ def main():
         auto_label=(not args.no_auto_label),
     )
     save_jsonl(samples, out_path)
-    print("[OUT] 写出:", out_path)
-    print("[OUT] 样本数:", len(samples))
+    _logging.info(f"[OUT] 写出: {out_path}")
+    _logging.info(f"[OUT] 样本数: {len(samples)}")
     if args.print_preview and len(samples) > 0:
         n = max(1, int(args.print_preview))
-        print("\n[PREVIEW] 仅展示前", n, "条 input（如出现乱码，请先在 PowerShell 执行 chcp 65001 或设置 $OutputEncoding 为 UTF-8）：")
+        _logging.info(f"\n[PREVIEW] 仅展示前 {n} 条 input（如出现乱码，请先在 PowerShell 执行 chcp 65001 或设置 $OutputEncoding 为 UTF-8）：")
         for i, s in enumerate(samples[:n], 1):
             inp = s.get("input", "")
             # 适度截断避免控制台过长
             if len(inp) > 1000:
                 inp = inp[:1000] + "... (truncated)"
-            print(f"\n--- SAMPLE #{i} INPUT ---\n" + inp)
-    print("done.")
+            _logging.info(f"\n--- SAMPLE #{i} INPUT ---\n" + inp)
+    _logging.info("done.")
 
 
 if __name__ == "__main__":

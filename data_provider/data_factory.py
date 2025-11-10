@@ -10,6 +10,7 @@ FilePath: /haitianbei/data_provider/data_factory.py
 
 from torch.utils.data import DataLoader
 from data_provider.data_loader import Dataset_KG
+import logging as _logging
 
 data_dict = {
     "KG": Dataset_KG,
@@ -42,7 +43,9 @@ def data_provider(args, flag):
         data_path=args.data_path,
         flag=flag,
     )
-    print(flag, len(data_set))
+    if not _logging.getLogger().handlers:
+        _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _logging.info(f"{flag} {len(data_set)}")
     data_loader = DataLoader(
         data_set,
         batch_size=batch_size,

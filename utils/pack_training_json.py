@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 from typing import Dict, List
+import logging as _logging
 
 
 REPL = {
@@ -103,7 +104,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     total = run(args.texts, args.triples, args.output)
-    print(f"Wrote {total} lines to {args.output}")
+    if not _logging.getLogger().handlers:
+        _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _logging.info(f"Wrote {total} lines to {args.output}")
 
 
 if __name__ == "__main__":

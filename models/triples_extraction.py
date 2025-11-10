@@ -19,6 +19,10 @@
 
 from __future__ import annotations
 
+import logging as _logging
+if not _logging.getLogger().handlers:
+	_logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
 import re
 from typing import List, Tuple, Optional, Set
 
@@ -44,8 +48,41 @@ def _norm_datetime(s: str) -> str:
 	return f"{y}-{mo}-{d}"
 
 
+def _canon_runway_token(tok: str) -> str:
+	"""将各种跑道写法规范为“跑道Z/跑道29/30/31”。
+
+	规则：
+	- 去除空格与“号”字；
+	- 去除前缀“着陆跑道”；
+	- Z/z -> 跑道Z；纯数字 -> 跑道{数字}；已带“跑道”前缀则规范大小写；
+	- 空字符串或异常回退 -> 跑道Z。
+	"""
+	if tok is None:
+		return "跑道Z"
+	s = str(tok).strip().replace(" ", "")
+	s = s.replace("号", "")
+	# 去掉“着陆跑道”前缀
+	if s.startswith("着陆跑道"):
+		s = s[len("着陆跑道"):]
+		s = s.strip()
+	# 若还带有“跑道”前缀，去掉后按主体处理
+	if s.startswith("跑道"):
+		s = s[len("跑道"):]
+		s = s.strip()
+	if not s:
+		return "跑道Z"
+	if s.upper() == "Z":
+		return "跑道Z"
+	if s.isdigit():
+		return f"跑道{s}"
+	# 兜底：若仍有“跑道X”形式，尽量保持
+	if tok.startswith("跑道") and len(tok) > 2:
+		return tok.replace(" ", "")
+	return "跑道Z"
+
+
 def extract_triples(text: str) -> List[Triple]:
-	# TODO: 着陆跑道仍然被识别为跑道Z
+	# 将“着陆跑道”统一规范为“跑道Z”，并规范其他跑道写法
 	"""基于正则与启发式的轻量三元组抽取。
 
 	规则覆盖要点：
@@ -112,7 +149,8 @@ def extract_triples(text: str) -> List[Triple]:
 
 	# 4) 跑道使用
 	# 例：使用着陆跑道Z / 使用跑道Z / 着陆跑道Z
-	runway_use = re.findall(r"使用?(?:着陆)?跑道\s*([A-Za-z0-9号]+)", text)
+	_runway_raw = re.findall(r"使用?(?:着陆)?跑道\s*([A-Za-z0-9号]+)", text)
+	runway_use = [_canon_runway_token(x) for x in _runway_raw]
 
 	# 5) 坐标
 	coord = None
@@ -145,7 +183,7 @@ def extract_triples(text: str) -> List[Triple]:
 	# 7) 牵引车待命位置
 	# 例：系统检测到5号牵引车待命于着陆跑道Z / 着陆跑道
 	for veh_no, loc in re.findall(r"(\d+号牵引车).*?待命于(着陆跑道\s*[A-Za-z0-9号]?)", text):
-		_add(triples, seen, (veh_no, "待命位置", loc.replace(" ", "")))
+		_add(triples, seen, (veh_no, "待命位置", _canon_runway_token(loc)))
 
 	# 8) 设备到达停机位（移动加氧车/移动加氮车/压缩空气终端/氧气终端/氮气终端 等）
 	for device, gate in re.findall(r"((?:\d+号)?(?:移动)?(?:加氧车|加氮车|压缩空气终端|氧气终端|氮气终端))到达(\d+)号停机位", text):
@@ -223,5 +261,5 @@ if __name__ == "__main__":
 		"系统检测到5号牵引车待命于着陆跑道。"
 	)
 	for s, p, o in extract_triples(demo):
-		print(f"({s}, {p}, {o})")
+		_logging.info(f"({s}, {p}, {o})")
 

@@ -37,12 +37,16 @@ class Dataset_KG(Dataset):
     - 查询：按主体/关系检索三元组，邻居与图谱快照。
     """
 
+    # 约束初始化类级一次性标志，防止多实例重复创建触发大量 SCHEMA 日志
+    _constraints_initialized: bool = False
+
     def __init__(self, root_path, flag="train", size=None,
                  data_path="海天杯-ST_Job_训练集.csv", load_data: bool = True,
                  neo4j_uri: str | None = None,
                  neo4j_user: str | None = None,
                  neo4j_password: str | None = None,
-                 neo4j_database: str | None = None) -> None:
+                 neo4j_database: str | None = None,
+                 create_constraints: bool = True) -> None:
         super().__init__()
         self.root_path = root_path
         self.data_path = data_path
@@ -64,8 +68,8 @@ class Dataset_KG(Dataset):
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"无法连接 Neo4j: {e}")
 
-        # 定义类标签与关系/属性映射
-        self._init_schema()
+        # 定义类标签与关系/属性映射（可控制是否尝试创建唯一约束）
+        self._init_schema(create_constraints=create_constraints)
         # 初始化固定资源
         self._init_static_graph()
 
@@ -85,7 +89,7 @@ class Dataset_KG(Dataset):
     # ----------------------------
     # 知识图谱：构建与更新
     # ----------------------------
-    def _init_schema(self):
+    def _init_schema(self, create_constraints: bool = True):
         """定义类标签与关系/属性映射（Neo4j 推荐使用英文大写关系类型）。"""
         # 节点标签
         self.Aircraft = "Aircraft"
@@ -144,6 +148,25 @@ class Dataset_KG(Dataset):
             "HAS_CURRENT_GATE",   # 当前停机位（唯一，已在到达时同步维护）
         }
 
+        # 可选：为常用标签创建 name 唯一约束/索引，提升 MATCH 性能并避免重复节点
+        if create_constraints and not Dataset_KG._constraints_initialized:
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    labels_with_unique = [
+                        self.Aircraft, self.Gate, self.Runway, self.Device,
+                        "Action", "Time", "Coordinate", "Speed", "Entity",
+                    ]
+                    for lbl in labels_with_unique:
+                        # 约束命名：<label>_name_unique，避免冲突
+                        cname = f"{lbl.lower()}_name_unique"
+                        sess.run(
+                            f"CREATE CONSTRAINT {cname} IF NOT EXISTS FOR (n:{lbl}) REQUIRE n.name IS UNIQUE"  # type: ignore[arg-type]
+                        )
+                Dataset_KG._constraints_initialized = True
+            except Exception:
+                # 无权限或旧版本语法不支持时，忽略，不影响正常运行
+                pass
+
     def _init_static_graph(self):
         """初始化固定资源到 Neo4j：停机位1-28，跑道Z，跑道29/30/31。"""
         with self.driver.session(database=self.neo4j_database) as sess:
@@ -199,32 +222,57 @@ class Dataset_KG(Dataset):
             # 目标实体规范化与类型推断
             obj_norm = self._canon_entity(obj_value, predicate_str)
             obj_label = self._class_for_entity(obj_norm) or "Entity"
+            s_label = self._class_for_entity(subject_name)
             with self.driver.session(database=self.neo4j_database) as sess:
                 # 确保目标存在
                 sess.run(f"MERGE (o:{obj_label} {{name:$obj}})", {"obj": obj_norm})  # type: ignore[arg-type]
                 # 单值状态维护：当前停机位在到达时更新
                 if predicate_str == "到达停机位":
                     # 先删除已有 HAS_CURRENT_GATE
-                    sess.run(
-                        "MATCH (s {name:$s})-[r:HAS_CURRENT_GATE]->(:Stand) DELETE r",
-                        {"s": subject_name},
-                    )
+                    if s_label:
+                        sess.run(
+                            f"MATCH (s:{s_label} {{name:$s}})-[r:HAS_CURRENT_GATE]->(:Stand) DELETE r",  # type: ignore[arg-type]
+                            {"s": subject_name},
+                        )
+                    else:
+                        sess.run(
+                            "MATCH (s {name:$s})-[r:HAS_CURRENT_GATE]->(:Stand) DELETE r",
+                            {"s": subject_name},
+                        )
                     # 补充 HAS_CURRENT_GATE
-                    sess.run(
-                        "MATCH (s {name:$s}),(o {name:$o}) MERGE (s)-[:HAS_CURRENT_GATE]->(o)",
-                        {"s": subject_name, "o": obj_norm},
-                    )
+                    if s_label:
+                        sess.run(
+                            f"MATCH (s:{s_label} {{name:$s}}) MATCH (o:Stand {{name:$o}}) MERGE (s)-[:HAS_CURRENT_GATE]->(o)",  # type: ignore[arg-type]
+                            {"s": subject_name, "o": obj_norm},
+                        )
+                    else:
+                        sess.run(
+                            "MATCH (s {name:$s}) MATCH (o:Stand {name:$o}) MERGE (s)-[:HAS_CURRENT_GATE]->(o)",
+                            {"s": subject_name, "o": obj_norm},
+                        )
                 # 冲突处理：对于单值关系，若已存在指向其它客体的边，先删除后再合入
                 if rel_type in self.SINGLE_VALUED_RELS:
+                    if s_label:
+                        sess.run(
+                            f"MATCH (s:{s_label} {{name:$s}})-[r:{rel_type}]->(x) WHERE x.name <> $o DELETE r",  # type: ignore[arg-type]
+                            {"s": subject_name, "o": obj_norm},
+                        )
+                    else:
+                        sess.run(
+                            f"MATCH (s {{name:$s}})-[r:{rel_type}]->(x) WHERE x.name <> $o DELETE r",  # type: ignore[arg-type]
+                            {"s": subject_name, "o": obj_norm},
+                        )
+                # 写入（或保持）指定关系
+                if s_label:
                     sess.run(
-                        f"MATCH (s {{name:$s}})-[r:{rel_type}]->(x) WHERE x.name <> $o DELETE r",  # type: ignore[arg-type]
+                        f"MATCH (s:{s_label} {{name:$s}}) MATCH (o:{obj_label} {{name:$o}}) MERGE (s)-[r:{rel_type}]->(o)",  # type: ignore[arg-type]
                         {"s": subject_name, "o": obj_norm},
                     )
-                # 写入（或保持）指定关系
-                sess.run(
-                    f"MATCH (s {{name:$s}}),(o {{name:$o}}) MERGE (s)-[r:{rel_type}]->(o)",  # type: ignore[arg-type]
-                    {"s": subject_name, "o": obj_norm},
-                )
+                else:
+                    sess.run(
+                        f"MATCH (s {{name:$s}}) MATCH (o:{obj_label} {{name:$o}}) MERGE (s)-[r:{rel_type}]->(o)",  # type: ignore[arg-type]
+                        {"s": subject_name, "o": obj_norm},
+                    )
         else:
             # 属性更新为单值 +（可选）值节点关系
             prop = meta["prop"]
@@ -241,19 +289,32 @@ class Dataset_KG(Dataset):
                 val_label = meta.get("val_label")
                 if rel_type and val_label:
                     # 单值化：确保同一主体在该 HAS_* 关系下只连向该值
-                    sess.run(
-                        f"MATCH (s {{name:$s}})-[r:{rel_type}]->(x) WHERE x.name <> $o DELETE r",  # type: ignore[arg-type]
-                        {"s": subject_name, "o": value},
-                    )
+                    s_label = self._class_for_entity(subject_name)
+                    if s_label:
+                        sess.run(
+                            f"MATCH (s:{s_label} {{name:$s}})-[r:{rel_type}]->(x:{val_label}) WHERE x.name <> $o DELETE r",  # type: ignore[arg-type]
+                            {"s": subject_name, "o": value},
+                        )
+                    else:
+                        sess.run(
+                            f"MATCH (s {{name:$s}})-[r:{rel_type}]->(x:{val_label}) WHERE x.name <> $o DELETE r",  # type: ignore[arg-type]
+                            {"s": subject_name, "o": value},
+                        )
                     # 合入值节点与关系
                     sess.run(
                         f"MERGE (o:{val_label} {{name:$o}})",  # type: ignore[arg-type]
                         {"o": value},
                     )
-                    sess.run(
-                        f"MATCH (s {{name:$s}}),(o {{name:$o}}) MERGE (s)-[:{rel_type}]->(o)",  # type: ignore[arg-type]
-                        {"s": subject_name, "o": value},
-                    )
+                    if s_label:
+                        sess.run(
+                            f"MATCH (s:{s_label} {{name:$s}}) MATCH (o:{val_label} {{name:$o}}) MERGE (s)-[:{rel_type}]->(o)",  # type: ignore[arg-type]
+                            {"s": subject_name, "o": value},
+                        )
+                    else:
+                        sess.run(
+                            f"MATCH (s {{name:$s}}) MATCH (o:{val_label} {{name:$o}}) MERGE (s)-[:{rel_type}]->(o)",  # type: ignore[arg-type]
+                            {"s": subject_name, "o": value},
+                        )
 
     # 规范化/类型推断
     def _canon_entity(self, ent: str, predicate: str | None = None) -> str:

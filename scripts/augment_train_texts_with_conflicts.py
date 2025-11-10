@@ -39,6 +39,7 @@ r"""
 兼容：若安装了 models.triples_extraction.extract_triples 则优先使用；否则退化到简易正则。
 """
 import os
+import logging as _logging
 import json
 import random
 import argparse
@@ -208,20 +209,22 @@ def main():
     total = len(records)
     modified = sum(1 for r in augmented if r.get("conflict_augmented"))
     extra = f" | 仅读取前 {args.limit} 条" if args.limit is not None else ""
-    print(f"总样本: {total}{extra} | 增强比例目标: {args.ratio:.2f} | 实际修改: {modified} ({modified/total:.2%})")
+    if not _logging.getLogger().handlers:
+        _logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _logging.info(f"总样本: {total}{extra} | 增强比例目标: {args.ratio:.2f} | 实际修改: {modified} ({modified/total:.2%})")
 
     if args.dry_run:
-        print("[dry_run] 不写输出文件。示例修改后样本：")
+        _logging.info("[dry_run] 不写输出文件。示例修改后样本：")
         for r in augmented[:3]:
             if r.get("conflict_augmented"):
                 field = _find_text_field(r)
                 if field:
-                    print("---")
-                    print(r[field])
+                    _logging.info("---")
+                    _logging.info(r[field])
         return
 
     save_jsonl(augmented, out_path)
-    print(f"已写出: {out_path}")
+    _logging.info(f"已写出: {out_path}")
 
 
 if __name__ == "__main__":

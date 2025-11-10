@@ -26,6 +26,7 @@ import json
 import os
 import sys
 from typing import Iterable, List
+import logging as _logging
 
 import pandas as pd
 
@@ -132,7 +133,9 @@ def main(argv: list[str] | None = None) -> None:
 	args = parser.parse_args(argv)
 
 	total = convert_csv_to_jsonl(args.input, args.output)
-	print(f"Wrote {total} lines to {args.output}")
+	if not _logging.getLogger().handlers:
+		_logging.basicConfig(level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+	_logging.info(f"Wrote {total} lines to {args.output}")
 
 
 if __name__ == "__main__":

@@ -35,8 +35,24 @@ class Runner:
         self.env = env
         self.args = args
 
-        self.agents = Agents(args)
-        self.rolloutWorker = RolloutWorker(env, self.agents, args)
+        # 确保在创建 Agents 之前补齐环境维度信息
+        try:
+            # 初始化环境（若已经 reset 可忽略异常）
+            if hasattr(self.env, 'reset'):
+                self.env.reset(self.args.n_agents)
+            if hasattr(self.env, 'get_env_info'):
+                info = self.env.get_env_info()
+                # 将必须的字段写回 args，供 Agents/QMIX 使用
+                self.args.n_actions = int(info.get('n_actions', getattr(self.args, 'n_actions', 0)))
+                self.args.state_shape = int(info.get('state_shape', getattr(self.args, 'state_shape', 0)))
+                self.args.obs_shape = int(info.get('obs_shape', getattr(self.args, 'obs_shape', 0)))
+                self.args.episode_limit = int(info.get('episode_limit', getattr(self.args, 'episode_limit', 0)))
+        except Exception:
+            # 保底：若 env 未提供上述方法，保持现状，由下游在访问时抛出更明确的错误
+            pass
+
+        self.agents = Agents(self.args)
+        self.rolloutWorker = RolloutWorker(self.env, self.agents, self.args)
 
         if args.learn:
             self.buffer = ReplayBuffer(args)

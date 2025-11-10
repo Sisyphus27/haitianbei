@@ -71,7 +71,7 @@ def main():
     parser.add_argument("--decomp_lora_adapter_dir", default=None, help="分解器 LoRA 适配器目录（可选）")
     parser.add_argument(
         "--decomp_base_model_dir",
-        default=os.path.join(default_root, "models", "Qwen3-4B"),
+        default=os.path.join(default_root, "models", "Qwen2_5-0.6B"),
         help="分解器基座模型目录（默认 Qwen3-0.6B）",
     )
 
@@ -103,6 +103,12 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4, help="stream-judge 小批量大小")
     parser.add_argument("--simple_output", action="store_true", default=False, help="推理仅输出‘合规/冲突’，不带依据与建议")
     parser.add_argument("--print_decomposition", action="store_true", default=False, help="在判定前打印分解器输出(JSON)")
+    # 预热控制
+    parser.add_argument("--no_warmup", action="store_true", default=False, help="禁用模型预热（首次推理会更慢）")
+    parser.add_argument("--warmup_order", choices=["judge_first", "decomp_first", "none"], default="judge_first",
+                        help="预热顺序：judge_first / decomp_first / none (等价于 --no_warmup)")
+    parser.add_argument("--no_warmup_decomp", action="store_true", default=False, help="只预热主判定模型，不预热分解器")
+    parser.add_argument("--warmup_timeout_sec", type=int, default=300, help="单模型预热超时时间 (秒)，超过即跳过")
 
     # 训练时动态拼接KG上下文（基于样本事件自动检索邻接）
     parser.add_argument("--no_augment_train_with_kg", action="store_true", default=False, help="禁用：为训练样本动态拼接KG上下文")
@@ -165,6 +171,16 @@ def main():
     parser.add_argument("--marl_obs_pad", type=int, default=32, help="先验拼接后尾部补零到该维度")
     parser.add_argument("--marl_no_export_csv", action="store_true", default=False, help="评估时不导出CSV")
     parser.add_argument("--marl_eval_only", action="store_true", default=False, help="仅评估已训练模型（不训练）")
+    # 触发 MARL 的策略：
+    parser.add_argument(
+        "--marl_trigger_policy",
+        choices=["llm_and_kg", "llm_or_kg", "llm_only", "kg_only"],
+        default="llm_only",
+        help=(
+            "触发 MARL 的条件：llm_and_kg=需LLM判冲突且KG给出理由(默认)，"
+            "llm_or_kg=LLM或KG任一触发，llm_only=仅LLM判冲突触发，kg_only=仅KG理由触发"
+        ),
+    )
 
     args = parser.parse_args()
     # 配置日志
