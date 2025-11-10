@@ -90,7 +90,7 @@
                 "--neo4j-user", "neo4j",
                 "--neo4j-password", "Neo4jPass2025",
                 "--lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/judge",
-                "--decomp_lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/decomposer"
+                "--decomp_lora_adapter_dir", "${workspaceFolder}/results_entity_judge/lora/decomposer",
             ],
             "env": {"PYTHONPATH": "${workspaceFolder}"},
             "envFile": "${workspaceFolder}/.env"

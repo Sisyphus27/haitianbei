@@ -127,11 +127,12 @@ class Exp_main(Exp_Basic):
         # KG 可视化输出目录与计数器
         self.kg_vis_dir = os.path.join(self.root, "results", "kg_vis")
         self.kg_vis_idx = 0
-        self.kg = None  # type: ignore[assignment]  # Optional[Dataset_KG]
+        # 统一：仅通过 KGServiceLocal 封装访问 KG；保留 self.kg 引用以兼容旧代码，但不直接使用。
         self.kg_service = None
+        self.kg = None  # 兼容旧逻辑；后续请使用 self.kg_service
         if not self.skip_kg:
             try:
-                self.kg = Dataset_KG(
+                _raw_kg = Dataset_KG(
                     self.root,
                     load_data=False,
                     neo4j_uri=self.neo4j_uri,
@@ -141,7 +142,7 @@ class Exp_main(Exp_Basic):
                 )
                 if self.reset_kg:
                     try:
-                        self.kg.reset_graph(keep_fixed=True)
+                        _raw_kg.reset_graph(keep_fixed=True)
                         _logging.info(
                             "[KG] (init) reset_graph 已执行，已清理历史动态关系，仅保留固定节点。"
                         )
@@ -162,12 +163,13 @@ class Exp_main(Exp_Basic):
                 except Exception:
                     pass
                 try:
-                    self.kg_service = KGServiceLocal(self.kg)
+                    self.kg_service = KGServiceLocal(_raw_kg)
+                    self.kg = self.kg_service.kg  # 仅兼容引用
                 except Exception:
                     self.kg_service = None
                 # 初始快照
                 try:
-                    _snap = self.kg.graph_snapshot()
+                    _snap = self.kg_service.graph_snapshot() if self.kg_service else {}
                     _logging.info(
                         f"[KG] (init) snapshot nodes={_snap.get('nodes_count')} edges={_snap.get('edges_count')}"
                     )
@@ -175,7 +177,7 @@ class Exp_main(Exp_Basic):
                     pass
             except Exception as _e:
                 _logging.info(f"[KG] 初始化失败，进入跳过模式：{_e}")
-                self.kg = None
+                self.kg_service = None
 
     def _build_model(self):
         """占位，满足基类在构造时的要求（torch 可选）。"""
@@ -200,6 +202,14 @@ class Exp_main(Exp_Basic):
         # ============ 新增：MARL 训练入口（复用 htb_environment，无需修改其源码） ============
         if mode == "marl-train":
             _logging.info("[MARL] 开始训练/评估 (mode=marl-train)")
+            default_event_jsonl = os.path.join(
+                self.root, "data_provider", "train_texts_conflict_aug.jsonl"
+            )
+            event_jsonl = getattr(self.args, "marl_event_jsonl", None) or default_event_jsonl
+            if not os.path.isfile(event_jsonl):
+                _logging.warning(
+                    f"[MARL] 指定的事件JSONL文件不存在: {event_jsonl}"
+                )
             info = self.train_marl(
                 use_task1_kg=bool(getattr(self.args, "marl_use_task1_kg", False)),
                 n_agents=int(getattr(self.args, "marl_n_agents", 8)),
@@ -230,11 +240,13 @@ class Exp_main(Exp_Basic):
                 obs_pad=int(getattr(self.args, "marl_obs_pad", 32)),
                 export_csv=not bool(getattr(self.args, "marl_no_export_csv", False)),
                 eval_only=bool(getattr(self.args, "marl_eval_only", False)),
+                event_jsonl=event_jsonl,
             )
             _logging.info("=== MARL Train Finished ===")
             _logging.info(f"result_dir  : {info.get('result_dir')}")
             _logging.info(f"result_name : {info.get('result_name')}")
             _logging.info(f"use_task1_kg: {info.get('use_task1_kg')}")
+            _logging.info(f"event_jsonl : {info.get('event_jsonl')}")
             return info
 
         if mode == "train":
@@ -609,18 +621,9 @@ class Exp_main(Exp_Basic):
 
         # 可选：动态拼接 KG 上下文（基于样本中的事件文本自动检索实体邻接）
         if augment_train_with_kg:
-            kg = None
-            try:
-                kg = Dataset_KG(
-                    self.root,
-                    load_data=False,
-                    neo4j_uri=self.neo4j_uri,
-                    neo4j_user=self.neo4j_user,
-                    neo4j_password=self.neo4j_password,
-                    neo4j_database=self.neo4j_database,
-                )
-            except Exception as _e:
-                _logging.info(f"[TRAIN] 动态KG拼接不可用（连接失败），将跳过：{_e}")
+            kg_service = self.kg_service  # 统一使用已初始化的服务
+            if kg_service is None:
+                _logging.info("[TRAIN] 未初始化 kg_service，跳过训练样本的KG上下文拼接。")
 
             def _extract_event_text(inp: str) -> str:
                 if not isinstance(inp, str):
@@ -656,7 +659,7 @@ class Exp_main(Exp_Basic):
                         seen.add(x)
                 return out[:8]
 
-            if kg is not None:
+            if kg_service is not None:
                 rules_text = (
                     self.build_rules_prompt(rules_md_path) if rules_md_path else ""
                 )
@@ -665,9 +668,12 @@ class Exp_main(Exp_Basic):
                     inp0 = ex.get("input", "")
                     ev = _extract_event_text(inp0)
                     focus = _auto_focus_entities(ev)
-                    kg_text = self._kg_text_context(
-                        kg, focus_entities=(focus or None), max_edges=200
-                    )
+                    try:
+                        kg_text = kg_service.get_context_text(
+                            focus_entities=(focus or None), limit=200
+                        )
+                    except Exception:
+                        kg_text = "【KG状态】\n(离线模式，服务异常)"
                     new_input = "\n\n".join(
                         [
                             p
@@ -1148,53 +1154,35 @@ class Exp_main(Exp_Basic):
             return self.build_rules_prompt(rules_md_path) if rules_md_path else ""
 
         def _kg_text_for_ev(ev: str) -> str:
-            try:
-                kg = Dataset_KG(
-                    self.root,
-                    load_data=False,
-                    neo4j_uri=self.neo4j_uri,
-                    neo4j_user=self.neo4j_user,
-                    neo4j_password=self.neo4j_password,
-                    neo4j_database=self.neo4j_database,
-                )
-            except Exception:
-                kg = None
-            if kg is None:
+            svc = self.kg_service
+            if svc is None:
                 return "【KG状态】\n(离线模式，未加载图谱)"
-            # 聚焦当前事件内实体
-            ents = []
+            ents: List[str] = []
             try:
                 for s, p, o in _extract_triples(ev):
                     ents += [str(s), str(o)]
             except Exception:
                 pass
-            see = []
+            ordered: List[str] = []
+            seen = set()
             for x in ents:
-                if x and (x not in see):
-                    see.append(x)
-            return self._kg_text_context(kg, focus_entities=(see or None))
+                if x and x not in seen:
+                    ordered.append(x)
+                    seen.add(x)
+            try:
+                return svc.get_context_text(focus_entities=(ordered or None), limit=200)
+            except Exception:
+                return "【KG状态】\n(离线模式，服务异常)"
 
         def _build_one(ev: str) -> dict:
             rtxt = _rules_text()
             ktxt = _kg_text_for_ev(ev)
             inp = "\n\n".join([x for x in (rtxt, ktxt, "【事件】\n" + ev) if x])
             # 生成一个启发式的"分解输出"：使用规则+KG的简单检查
+            conflicts: List[str] = []
             try:
-                kg2 = None
-                try:
-                    kg2 = Dataset_KG(
-                        self.root,
-                        load_data=False,
-                        neo4j_uri=self.neo4j_uri,
-                        neo4j_user=self.neo4j_user,
-                        neo4j_password=self.neo4j_password,
-                        neo4j_database=self.neo4j_database,
-                    )
-                except Exception:
-                    kg2 = None
-                conflicts = []
-                if kg2 is not None:
-                    chk = kg2.check_event_conflicts(ev)
+                if self.kg_service is not None:
+                    chk = self.kg_service.check_event_conflicts(ev) or {}
                     conflicts = chk.get("reasons", []) or []
             except Exception:
                 conflicts = []
@@ -1744,6 +1732,12 @@ class Exp_main(Exp_Basic):
 
         _result_dir = os.path.join(self.root, "htb_environment", "result")
         _model_dir = os.path.join(self.root, "htb_environment", "MARL", "model")
+        default_event_jsonl = os.path.join(
+            self.root, "data_provider", "train_texts_conflict_aug.jsonl"
+        )
+        rectify_event_jsonl = (
+            getattr(self.args, "marl_event_jsonl", None) or default_event_jsonl
+        )
         rname = f"rectify_{result_name_suffix}"
         args = _NS(
             map="boatschedule",
@@ -1802,7 +1796,12 @@ class Exp_main(Exp_Basic):
                 small.n_episodes = 1
                 small.train_steps = 1
                 small.evaluate_cycle = None
-                run_kg_epoch_pipeline(small)
+                # 统一传递现有 kg_service，保持与主流程一致
+                run_kg_epoch_pipeline(
+                    small,
+                    kg_service=self.kg_service,
+                    event_jsonl=rectify_event_jsonl,
+                )
             except Exception:
                 pass
 
@@ -2366,12 +2365,12 @@ class Exp_main(Exp_Basic):
         self.kg_vis_idx = _kg_vis_idx
 
     # =====================================================================
-    # 新增：MARL 训练（复用 htb_environment，严禁修改其源码）
+    # MARL 训练
     # =====================================================================
     def train_marl(
         self,
         *,
-        use_task1_kg: bool = False,
+        use_task1_kg: bool = True,
         n_agents: int = 8,
         result_dir: Optional[str] = None,
         result_name: str = "exp",
@@ -2392,8 +2391,9 @@ class Exp_main(Exp_Basic):
         obs_pad: int = 32,
         export_csv: bool = True,
         eval_only: bool = False,
+        event_jsonl: Optional[str] = None,
     ) -> dict:
-        """在不修改 htb_environment 的前提下，直接复用其模块完成 MARL 训练/评估。"""
+        
         # 先确保优先搜索 htb_environment 下的 utils（避免被项目根目录下的 utils 覆盖）
         try:
             _htb_dir = os.path.join(self.root, "htb_environment")
@@ -2525,12 +2525,18 @@ class Exp_main(Exp_Basic):
 
         # KG 闭环：直接调用 htb_environment.pipeline
         if use_task1_kg:
-            run_kg_epoch_pipeline(args)
+            # 统一传递已有 kg_service，确保图谱增量更新一致
+            run_kg_epoch_pipeline(
+                args,
+                kg_service=self.kg_service,
+                event_jsonl=event_jsonl,
+            )
             return {
                 "use_task1_kg": True,
                 "result_dir": _result_dir,
                 "result_name": result_name,
                 "learn": not bool(eval_only),
+                "event_jsonl": event_jsonl,
             }
 
         # 纯 MARL（无 KG）：复用其环境与 Runner
@@ -2574,4 +2580,5 @@ class Exp_main(Exp_Basic):
             "result_dir": _result_dir,
             "result_name": result_name,
             "learn": not bool(eval_only),
+            "event_jsonl": event_jsonl,
         }

@@ -1,32 +1,154 @@
 # pipeline.py（新增/覆盖同名函数）
 import os
 import json
+import logging
 import numpy as np
 from datetime import datetime
 
 from environment import ScheduleEnv
 from MARL.agent.agent import Agents
 from MARL.common.rollout import RolloutWorker
+from MARL.common.arguments import get_mixer_args
 from MARL.common.replay_buffer import ReplayBuffer
 
 from pipeline.kg_bridge import T1KGPriorAdapter, schedule_to_kg_triples  # NEW：使用任务一接口的适配器
 from data_provider.data_loader import Dataset_KG  # NEW：直接导入任务一核心类
+from exp.kg_service import KGServiceLocal  # 使用本地KG服务封装
 from utils.schedule_converter import convert_schedule_with_fixed_logic
 
 
 class NpEncoder(json.JSONEncoder):
-    def default(self, obj):
+    def default(self, o):
         try:
             import numpy as np
-            if isinstance(obj, (np.integer,)):
-                return int(obj)
-            if isinstance(obj, (np.floating,)):
-                return float(obj)
-            if isinstance(obj, (np.ndarray,)):
-                return obj.tolist()
+            if isinstance(o, (np.integer,)):
+                return int(o)
+            if isinstance(o, (np.floating,)):
+                return float(o)
+            if isinstance(o, (np.ndarray,)):
+                return o.tolist()
         except Exception:
             pass
-        return super().default(obj)
+        return super().default(o)
+
+
+def _load_event_texts(event_jsonl: str | None) -> list[str]:
+    if not event_jsonl:
+        return []
+    logger = logging.getLogger(__name__)
+    texts: list[str] = []
+    try:
+        with open(event_jsonl, "r", encoding="utf-8") as f:
+            for line in f:
+                ln = line.strip()
+                if not ln:
+                    continue
+                payload: str | None = None
+                try:
+                    obj = json.loads(ln)
+                    if isinstance(obj, dict):
+                        for key in ("text", "event", "input"):
+                            val = obj.get(key)
+                            if isinstance(val, str) and val.strip():
+                                payload = val.strip()
+                                break
+                    elif isinstance(obj, str) and obj.strip():
+                        payload = obj.strip()
+                except json.JSONDecodeError:
+                    payload = ln
+                if payload:
+                    texts.append(payload)
+    except FileNotFoundError:
+        logger.warning("[KG-Pipeline] 事件JSONL文件不存在: %s", event_jsonl)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[KG-Pipeline] 加载事件JSONL失败 (%s): %s", event_jsonl, exc)
+    return texts
+
+
+class KGAwareEnv:
+    """包装原始环境，使其在观测与动作后与任务一KG保持同步。"""
+
+    def __init__(
+        self,
+        env,
+        kg_service: KGServiceLocal | None,
+        event_texts: list[str],
+        *,
+        events_per_step: int = 1,
+        loop_events: bool = False,
+    ) -> None:
+        self._env = env
+        self._kg_service = kg_service
+        self._event_texts = list(event_texts or [])
+        self._events_per_step = max(1, int(events_per_step))
+        self._loop_events = bool(loop_events)
+        self._event_iter = iter(self._event_texts)
+        self._last_event_len = 0
+        self._log = logging.getLogger(__name__)
+
+    def __getattr__(self, item):
+        return getattr(self._env, item)
+
+    def reset(self, n_agents):
+        if self._loop_events:
+            self._event_iter = iter(self._event_texts)
+        self._last_event_len = 0
+        return self._env.reset(n_agents)
+
+    def get_obs(self):
+        self._inject_events_into_kg()
+        return self._env.get_obs()
+
+    def step(self, actions):
+        reward, terminated, info = self._env.step(actions)
+        self._sync_env_events_to_kg(info)
+        return reward, terminated, info
+
+    # ---- internal helpers -------------------------------------------------
+    def _next_event_text(self) -> str | None:
+        if not self._event_texts:
+            return None
+        try:
+            return next(self._event_iter)
+        except StopIteration:
+            if not self._loop_events:
+                return None
+            self._event_iter = iter(self._event_texts)
+            try:
+                return next(self._event_iter)
+            except StopIteration:
+                return None
+
+    def _inject_events_into_kg(self) -> None:
+        if not self._kg_service:
+            return
+        for _ in range(self._events_per_step):
+            text = self._next_event_text()
+            if not text:
+                break
+            try:
+                self._kg_service.extract_and_update(text)
+            except Exception as exc:  # noqa: BLE001
+                self._log.warning("[KG-Pipeline] 事件写入KG失败: %s", exc)
+
+    def _sync_env_events_to_kg(self, info) -> None:
+        if not self._kg_service:
+            return
+        if not isinstance(info, dict):
+            return
+        episodes = info.get("episodes_situation")
+        if not episodes:
+            return
+        new_events = episodes[self._last_event_len :]
+        if not new_events:
+            return
+        try:
+            triples = schedule_to_kg_triples(new_events, self._env)
+            if triples:
+                self._kg_service.kg.update_with_triples(triples)
+        except Exception as exc:  # noqa: BLE001
+            self._log.warning("[KG-Pipeline] 调度结果回写KG失败: %s", exc)
+        self._last_event_len = len(episodes)
 
 
 def _episodes_makespan(episodes_situation):
@@ -35,7 +157,7 @@ def _episodes_makespan(episodes_situation):
     return max((t + pmin + mmin) for (t, _, _, _, pmin, mmin) in episodes_situation)
 
 # LOG： 完整的 KG 闭环训练流程
-def run_kg_epoch_pipeline(args):
+def run_kg_epoch_pipeline(args, kg_service=None, event_jsonl: str | None = None):
     """
     完整闭环：
     1) 创建并连接任务一的 KG 客户端 Dataset_KG
@@ -50,24 +172,70 @@ def run_kg_epoch_pipeline(args):
     info_path = os.path.join(save_path, "info.json")
     plan_path = os.path.join(save_path, "plan.json")
 
-    # (1) —— 任务一：初始化 Dataset_KG（连接 Neo4j）
-    kg = Dataset_KG(
-        root_path=os.getcwd(),
-        load_data=False,
-        neo4j_uri=getattr(args, "neo4j_uri", os.environ.get("NEO4J_URI")),
-        neo4j_user=getattr(args, "neo4j_user", os.environ.get("NEO4J_USER")),
-        neo4j_password=getattr(args, "neo4j_password",
-                            os.environ.get("NEO4J_PASSWORD")),
-        neo4j_database=getattr(args, "neo4j_database",
-                            os.environ.get("NEO4J_DATABASE", None)),
-    )
+    # (0) —— 补充算法默认超参（rnn_hidden_dim 等），避免上游未调用时缺参
+    try:
+        args = get_mixer_args(args)
+    except Exception:
+        pass
+
+    # (1) —— 任务一：优先使用调用方传入的 KGServiceLocal；否则创建（连接 Neo4j）并封装
+    if kg_service is None:
+        kg_core = Dataset_KG(
+            root_path=os.getcwd(),
+            load_data=False,
+            neo4j_uri=getattr(args, "neo4j_uri", os.environ.get("NEO4J_URI")),
+            neo4j_user=getattr(args, "neo4j_user", os.environ.get("NEO4J_USER")),
+            neo4j_password=getattr(args, "neo4j_password",
+                                os.environ.get("NEO4J_PASSWORD")),
+            neo4j_database=getattr(args, "neo4j_database",
+                                os.environ.get("NEO4J_DATABASE", None)),
+        )
+        kg_service = KGServiceLocal(kg_core, ctx_ttl_sec=2)
 
     # (2) —— 环境 + 先验（用任务一图谱）
     env = ScheduleEnv(args)
+    # 先验从底层 Dataset_KG 读取统计（T1KGPriorAdapter 依赖 neighbors 等底层接口）
     prior = T1KGPriorAdapter(
-        kg, ds=args.prior_dim_site, dp=args.prior_dim_plane)
+        kg_service.kg, ds=args.prior_dim_site, dp=args.prior_dim_plane)
     env.attach_prior(prior, args.prior_dim_site,
                     args.prior_dim_plane)  # 环境会在 get_obs 时融合先验
+
+    event_texts = _load_event_texts(event_jsonl)
+    if event_texts and kg_service is not None:
+        events_per_step = getattr(args, "kg_events_per_step", 1)
+        loop_events = getattr(args, "kg_events_loop", False)
+        env = KGAwareEnv(
+            env,
+            kg_service,
+            event_texts,
+            events_per_step=max(1, int(events_per_step)
+                                if events_per_step else 1),
+            loop_events=bool(loop_events),
+        )
+        logging.getLogger(__name__).info(
+            "[KG-Pipeline] 已加载事件文本 %d 条, events_per_step=%s, loop=%s",
+            len(event_texts),
+            getattr(args, "kg_events_per_step", 1),
+            getattr(args, "kg_events_loop", False),
+        )
+    elif event_texts and kg_service is None:
+        logging.getLogger(__name__).warning(
+            "[KG-Pipeline] 存在事件文本但未提供KG服务, 将忽略事件驱动更新"
+        )
+    elif not event_texts:
+        logging.getLogger(__name__).info("[KG-Pipeline] 未启用事件数据驱动KG同步")
+
+    # 补齐 Agents 所需的环境维度信息
+    try:
+        env.reset(args.n_agents)
+        info = env.get_env_info()
+        args.n_actions = int(info["n_actions"])  # type: ignore[attr-defined]
+        args.state_shape = int(info["state_shape"])  # type: ignore[attr-defined]
+        args.obs_shape = int(info["obs_shape"])  # type: ignore[attr-defined]
+        args.episode_limit = int(info["episode_limit"])  # type: ignore[attr-defined]
+    except Exception:
+        # 若失败，继续抛给后续模块以便定位
+        pass
 
     agents = Agents(args)
     rollout = RolloutWorker(env, agents, args)
@@ -78,13 +246,14 @@ def run_kg_epoch_pipeline(args):
         "evaluate_makespan": [], "average_makespan": [],
         "evaluate_move_time": [], "average_move_time": [],
         "win_rates": [], "train_reward": [], "train_makespan": [],
-        "train_move_time": [], "loss": [], "schedule_results": [], "devices_results": []
+        "train_move_time": [], "loss": [], "schedule_results": [], "devices_results": [],
+        "running_time": ""
     }
 
     start_time = datetime.now()
     train_steps = 0
     evaluate_times = 0
-
+    # NOTE: 结合事件流与KG同步的海天杯训练循环
     for epoch in range(args.n_epoch):
         # === 采样若干 episodes ===
         episodes = []
@@ -120,7 +289,8 @@ def run_kg_epoch_pipeline(args):
         # === 每个 epoch 的 KG 闭环：把“最好的一组调度”写回任务一图谱 ===
         if best_gantt:
             triples = schedule_to_kg_triples(best_gantt, env)
-            kg.update_with_triples(triples)  # —— 任务一核心接口：不改任务一代码
+            # 通过本地服务封装触达底层更新接口
+            kg_service.kg.update_with_triples(triples)
 
         # === 可选评估 ===
         if args.evaluate_cycle and (epoch + 1) % args.evaluate_cycle == 0:

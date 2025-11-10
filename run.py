@@ -148,7 +148,7 @@ def main():
     parser.add_argument("--gpu", type=int, default=0)
 
     # ================= MARL 训练相关参数（复用 htb_environment） =================
-    parser.add_argument("--marl_use_task1_kg", action="store_true", default=False,
+    parser.add_argument("--marl_use_task1_kg", action="store_true", default=True,
                         help="使用任务一的 Dataset_KG 形成先验闭环（需可用的 Neo4j 连接）")
     parser.add_argument("--marl_n_agents", type=int, default=8, help="智能体数量（飞机数）")
     parser.add_argument("--marl_result_dir", default=os.path.join(default_root, "htb_environment", "result"),
