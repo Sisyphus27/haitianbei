@@ -11,6 +11,7 @@ FilePath: haitianbei/data_provider/data_loader.py
 import os
 import re
 import json
+import logging
 from urllib.parse import quote
 
 import numpy as np
@@ -25,17 +26,59 @@ from neo4j import GraphDatabase, basic_auth
 # 三元组抽取器
 from models.triples_extraction import extract_triples
 
+from htb_environment.utils.job import Jobs
+
 import warnings
 
 warnings.filterwarnings("ignore")
+
+_logger = logging.getLogger(__name__)
 
 class Dataset_KG(Dataset):
     """基于 Neo4j 的知识图谱构建与查询。
 
     - 初始化：连接 Neo4j，并创建固定资源（停机位1-28、跑道Z/29/30/31）。
+    - 静态拓扑：构建停机位/跑道链路图与“作业-固定设备-停机位”保障拓扑。
     - 动态更新：可通过三元组增量更新（自动实体规范化与类型推断）。
     - 查询：按主体/关系检索三元组，邻居与图谱快照。
     """
+
+    _STAND_CHAIN = ["跑道Z"] + [f"停机位{i}" for i in range(1, 29)] + ["跑道29", "跑道30", "跑道31"]
+    # 固定设备覆盖表：来源于海天杯技术资料表4（与环境仿真配置保持一致）
+    _FIXED_DEVICE_LAYOUT = {
+        "FR1": ("R001", tuple(range(1, 7))),
+        "FR2": ("R001", tuple(range(7, 15))),
+        "FR3": ("R001", tuple(range(15, 23))),
+        "FR4": ("R001", tuple(range(23, 29))),
+        "FR5": ("R002", tuple(range(1, 7))),
+        "FR6": ("R002", tuple(range(7, 15))),
+        "FR7": ("R002", tuple(range(15, 23))),
+        "FR8": ("R002", tuple(range(23, 29))),
+        "FR9": ("R003", tuple(range(1, 7))),
+        "FR10": ("R003", tuple(range(7, 15))),
+        "FR11": ("R003", tuple(range(15, 23))),
+        "FR12": ("R003", tuple(range(23, 29))),
+        "FR13": ("R005", tuple(range(1, 7))),
+        "FR14": ("R005", tuple(range(7, 15))),
+        "FR15": ("R005", tuple(range(15, 23))),
+        "FR16": ("R005", tuple(range(23, 29))),
+        "FR17": ("R006", tuple(range(1, 7))),
+        "FR18": ("R006", tuple(range(7, 15))),
+        "FR19": ("R006", tuple(range(15, 23))),
+        "FR20": ("R006", tuple(range(23, 29))),
+        "FR21": ("R007", tuple(range(1, 7))),
+        "FR22": ("R007", tuple(range(7, 15))),
+        "FR23": ("R007", tuple(range(15, 23))),
+        "FR24": ("R007", tuple(range(23, 29))),
+        "FR25": ("R008", tuple(range(1, 7))),
+        "FR26": ("R008", tuple(range(7, 15))),
+        "FR27": ("R008", tuple(range(15, 23))),
+        "FR28": ("R008", tuple(range(23, 29))),
+        "FR29": ("R008", tuple(range(1, 7))),
+        "FR30": ("R008", tuple(range(7, 15))),
+        "FR31": ("R008", tuple(range(15, 23))),
+        "FR32": ("R008", tuple(range(23, 29))),
+    }
 
     # 约束初始化类级一次性标志，防止多实例重复创建触发大量 SCHEMA 日志
     _constraints_initialized: bool = False
@@ -96,6 +139,9 @@ class Dataset_KG(Dataset):
         self.Gate = "Stand"
         self.Runway = "Runway"
         self.Device = "Device"
+        self.Job = "Job"
+        self.Resource = "Resource"
+        self.FixedDevice = "FixedDevice"
 
         # 将中文谓词映射到关系类型或节点属性
         # rel: 使用关系，prop: 使用节点属性
@@ -136,6 +182,12 @@ class Dataset_KG(Dataset):
             "HAS_TIME": "时间",
             "HAS_COORDINATE": "坐标",
             "HAS_SPEED": "速度",
+            "CHAIN_NEXT": "邻接",
+            "REQUIRES_RESOURCE": "需要资源",
+            "SERVES_RESOURCE": "服务资源",
+            "HAS_DEVICE": "可用设备",
+            "COVERS_STAND": "覆盖停机位",
+            "AVAILABLE_AT": "可用停机位",
         }
 
         # 指定哪些关系在业务上是“单值”的：同一主体该关系同时最多指向一个客体
@@ -154,6 +206,7 @@ class Dataset_KG(Dataset):
                 with self.driver.session(database=self.neo4j_database) as sess:
                     labels_with_unique = [
                         self.Aircraft, self.Gate, self.Runway, self.Device,
+                        self.Job, self.Resource, self.FixedDevice,
                         "Action", "Time", "Coordinate", "Speed", "Entity",
                     ]
                     for lbl in labels_with_unique:
@@ -168,26 +221,86 @@ class Dataset_KG(Dataset):
                 pass
 
     def _init_static_graph(self):
-        """初始化固定资源到 Neo4j：停机位1-28，跑道Z，跑道29/30/31。"""
+        """构建静态拓扑：跑道-停机位链与作业-资源-设备-停机位保障图。"""
+
+        jobs_spec = Jobs()
+        resource_from_jobs = {
+            res for job in jobs_spec.jobs_object_list for res in job.required_resources
+        }
+        resource_from_devices = {cfg[0] for cfg in self._FIXED_DEVICE_LAYOUT.values()}
+        all_resources = sorted(resource_from_jobs | resource_from_devices)
+
         with self.driver.session(database=self.neo4j_database) as sess:
-            # 停机位 1-28
-            for i in range(1, 29):
-                name = f"停机位{i}"
+            # --- 跑道/停机位链 ---
+            for node_name in self._STAND_CHAIN:
+                label = self._class_for_entity(node_name) or "Entity"
                 sess.run(
-                    f"MERGE (n:{self.Gate} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
-                    {"name": name},
+                    f"MERGE (n:{label} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
+                    {"name": node_name},
                 )
-            # 跑道 Z
-            sess.run(
-                f"MERGE (n:{self.Runway} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
-                {"name": "跑道Z"},
-            )
-            # 跑道 29/30/31
-            for r in (29, 30, 31):
+
+            for src, dst in zip(self._STAND_CHAIN, self._STAND_CHAIN[1:]):
+                src_label = self._class_for_entity(src) or "Entity"
+                dst_label = self._class_for_entity(dst) or "Entity"
                 sess.run(
-                    f"MERGE (n:{self.Runway} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
-                    {"name": f"跑道{r}"},
+                    f"MATCH (s:{src_label} {{name:$src}}) MATCH (t:{dst_label} {{name:$dst}}) "  # type: ignore[arg-type]
+                    "MERGE (s)-[:CHAIN_NEXT]->(t) "
+                    "MERGE (t)-[:CHAIN_NEXT]->(s)",
+                    {"src": src, "dst": dst},
                 )
+
+            # --- 资源与作业 ---
+            for res in all_resources:
+                sess.run(
+                    "MERGE (r:Resource {name:$name}) SET r.isFixed = true",  # type: ignore[arg-type]
+                    {"name": res},
+                )
+
+            for job in jobs_spec.jobs_object_list:
+                sess.run(
+                    "MERGE (j:Job {name:$name}) "
+                    "SET j.displayName = $display, j.group = $group, "
+                    "j.duration = $duration, j.isFixed = true",  # type: ignore[arg-type]
+                    {
+                        "name": job.code,
+                        "display": job.name,
+                        "group": job.group,
+                        "duration": float(job.time_span),
+                    },
+                )
+                for res in job.required_resources:
+                    sess.run(
+                        "MATCH (j:Job {name:$job}) MATCH (r:Resource {name:$res}) "
+                        "MERGE (j)-[:REQUIRES_RESOURCE]->(r)",
+                        {"job": job.code, "res": res},
+                    )
+
+            # --- 固定设备覆盖 ---
+            for device_name, (resource_code, stand_ids) in self._FIXED_DEVICE_LAYOUT.items():
+                stand_names = [f"停机位{sid}" for sid in stand_ids]
+                sess.run(
+                    "MERGE (d:Device:FixedDevice {name:$name}) "
+                    "SET d.resource = $resource, d.coverage = $coverage, d.isFixed = true",  # type: ignore[arg-type]
+                    {
+                        "name": device_name,
+                        "resource": resource_code,
+                        "coverage": stand_names,
+                    },
+                )
+
+                sess.run(
+                    "MATCH (d:FixedDevice {name:$device}) MATCH (r:Resource {name:$resource}) "
+                    "MERGE (d)-[:SERVES_RESOURCE]->(r) "
+                    "MERGE (r)-[:HAS_DEVICE]->(d)",
+                    {"device": device_name, "resource": resource_code},
+                )
+
+        _logger.info(
+            "Static KG ready: %d chain nodes, %d resources, %d fixed devices",  # noqa: G004
+            len(self._STAND_CHAIN),
+            len(all_resources),
+            len(self._FIXED_DEVICE_LAYOUT),
+        )
 
     def fixed_nodes(self):
         """返回被标注为“固定不动”的实体标签列表及计数。"""
@@ -353,6 +466,14 @@ class Dataset_KG(Dataset):
             return self.Runway
         if re.search(r"牵引车|加氧车|加氮车|空气终端|氧气终端|氮气终端|压缩空气终端|清洗装置", name):
             return self.Device
+        if re.fullmatch(r"FR\d{1,3}", name):
+            return self.Device
+        if re.fullmatch(r"MR\d{2}", name):
+            return self.Device
+        if re.fullmatch(r"R\d{3}", name):
+            return self.Resource
+        if re.fullmatch(r"ZY[A-Z0-9]+", name):
+            return self.Job
         return None
 
     def _get_label(self, node_name_or_record) -> str:
