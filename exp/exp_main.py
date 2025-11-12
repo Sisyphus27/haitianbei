@@ -140,14 +140,23 @@ class Exp_main(Exp_Basic):
                     neo4j_password=self.neo4j_password,
                     neo4j_database=self.neo4j_database,
                 )
-                if self.reset_kg:
+                # 统一封装为本地服务，后续所有操作均通过 service 进行
+                try:
+                    self.kg_service = KGServiceLocal(_raw_kg)
+                    self.kg = self.kg_service.kg  # 仅兼容引用
+                except Exception:
+                    self.kg_service = None
+
+                # 根据开关通过 kg_service 执行 reset，更贴近真实运行路径
+                if self.reset_kg and self.kg_service is not None:
                     try:
-                        _raw_kg.reset_graph(keep_fixed=True)
+                        self.kg_service.reset_graph(keep_fixed=True)
                         _logging.info(
                             "[KG] (init) reset_graph 已执行，已清理历史动态关系，仅保留固定节点。"
                         )
                     except Exception:
                         pass
+
                     # 清空旧的可视化目录
                     try:
                         if os.path.isdir(self.kg_vis_dir):
@@ -157,16 +166,13 @@ class Exp_main(Exp_Basic):
                                     os.remove(_fp)
                     except Exception:
                         pass
+
                 # 确保目录存在
                 try:
                     os.makedirs(self.kg_vis_dir, exist_ok=True)
                 except Exception:
                     pass
-                try:
-                    self.kg_service = KGServiceLocal(_raw_kg)
-                    self.kg = self.kg_service.kg  # 仅兼容引用
-                except Exception:
-                    self.kg_service = None
+
                 # 初始快照
                 try:
                     _snap = self.kg_service.graph_snapshot() if self.kg_service else {}

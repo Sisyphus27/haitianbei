@@ -210,6 +210,23 @@ def extract_triples(text: str) -> List[Triple]:
 					continue
 				_add(triples, seen, (ac, pred, obj))
 
+		# 3.1) 保障作业实例模式 (任务_设备) 捕获：例如 "ZY03_MR01" 或 "ZY04_FR02"
+		# 设计意图：当日志中直接出现具体任务与具体保障车编码的组合时，为后续 KG 建模 JobInstance 提供输入。
+		# 模式说明：
+		#   - 任务编码：ZY 后接 1-3 个字母/数字 (兼容 ZY_Z, ZY_M, ZY01, ZY18 等)
+		#   - 分隔符：下划线 "_"
+		#   - 设备类型前缀：FR (固定设备车) / MR (移动设备车) / 可未来扩展 TR, DR 等；后接 1-3 位数字。
+		# 扩展：也允许形如 "ZY03 FR01" 有空格分隔的写法，统一规范为 "ZY03_FR01"。
+		instance_tokens: Set[str] = set()
+		# 下划线形式
+		for m in re.findall(r"(ZY[A-Z0-9]{1,3})_((?:FR|MR)[0-9]{1,3})", text):
+			instance_tokens.add("_".join(m))
+		# 空格分隔形式（例如 ZY03 FR01）
+		for m in re.findall(r"(ZY[A-Z0-9]{1,3})\s+((?:FR|MR)[0-9]{1,3})", text):
+			instance_tokens.add("_".join(m))
+		for tok in instance_tokens:
+			_add(triples, seen, (ac, "动作", tok))
+
 		# 跑道
 		for rwy in runway_use:
 			_add(triples, seen, (ac, "使用跑道", rwy))

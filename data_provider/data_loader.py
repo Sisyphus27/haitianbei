@@ -132,6 +132,7 @@ class Dataset_KG(Dataset):
     # ----------------------------
     # 知识图谱：构建与更新
     # ----------------------------
+    # FIXME: 初始化图有问题
     def _init_schema(self, create_constraints: bool = True):
         """定义类标签与关系/属性映射（Neo4j 推荐使用英文大写关系类型）。"""
         # 节点标签
@@ -142,6 +143,8 @@ class Dataset_KG(Dataset):
         self.Job = "Job"
         self.Resource = "Resource"
         self.FixedDevice = "FixedDevice"
+        # 新增：作业实例（按 任务_车编号 区分）
+        self.JobInstance = "JobInstance"
 
         # 将中文谓词映射到关系类型或节点属性
         # rel: 使用关系，prop: 使用节点属性
@@ -165,6 +168,9 @@ class Dataset_KG(Dataset):
             "坐标": {"type": "prop", "prop": "coordinate", "rel": "HAS_COORDINATE", "val_label": "Coordinate"},
             "速度": {"type": "prop", "prop": "speed", "rel": "HAS_SPEED", "val_label": "Speed"},
             "固定不动": {"type": "prop", "prop": "isFixed"},
+            # 新增：当文本包含作业编号（如 ZY03）时，可将其视为“执行作业”
+            # 执行作业：兼容旧三元组，作为属性捕获原始文本 + 值节点；实例化逻辑在 _add_object 中处理
+            "执行作业": {"type": "prop", "prop": "job_action", "rel": "HAS_JOB_ACTION", "val_label": "JobAction"},
         }
 
         # 关系类型到中文名（用于可视化/查询展示）
@@ -188,16 +194,26 @@ class Dataset_KG(Dataset):
             "HAS_DEVICE": "可用设备",
             "COVERS_STAND": "覆盖停机位",
             "AVAILABLE_AT": "可用停机位",
+            "HAS_JOB_ACTION": "执行作业",
+            "JOB_CAN_USE_DEVICE": "可用固定设备",
+            # 新增：作业实例相关关系
+            "PERFORMS_JOB_INSTANCE": "执行作业实例",
+            "JOB_INSTANCE_OF": "作业类型",
+            "ASSIGNED_TO_JOB_INSTANCE": "分配作业实例",
         }
 
         # 指定哪些关系在业务上是“单值”的：同一主体该关系同时最多指向一个客体
         # 避免出现冲突（重复/多值）时越积越多，这些关系在插入新三元组时会自动清理旧客体关系
-        self.SINGLE_VALUED_RELS: set[str] = {
+        # 单值关系集合
+        self.SINGLE_VALUED_RELS = {
             "USES_RUNWAY",        # 使用跑道（通常一次只使用一个跑道）
             "ASSIGNED_GATE",      # 分配停机位（分配应唯一）
             "TARGET_GATE",        # 目标停机位（目标应唯一）
             "STANDBY_AT",         # 待命位置（唯一）
             "HAS_CURRENT_GATE",   # 当前停机位（唯一，已在到达时同步维护）
+            # 新增：同一时间一个飞机只执行一个作业实例；一台车只分配到一个作业实例
+            "PERFORMS_JOB_INSTANCE",
+            "ASSIGNED_TO_JOB_INSTANCE",
         }
 
         # 可选：为常用标签创建 name 唯一约束/索引，提升 MATCH 性能并避免重复节点
@@ -206,7 +222,7 @@ class Dataset_KG(Dataset):
                 with self.driver.session(database=self.neo4j_database) as sess:
                     labels_with_unique = [
                         self.Aircraft, self.Gate, self.Runway, self.Device,
-                        self.Job, self.Resource, self.FixedDevice,
+                        self.Job, self.Resource, self.FixedDevice, self.JobInstance,
                         "Action", "Time", "Coordinate", "Speed", "Entity",
                     ]
                     for lbl in labels_with_unique:
@@ -224,11 +240,8 @@ class Dataset_KG(Dataset):
         """构建静态拓扑：跑道-停机位链与作业-资源-设备-停机位保障图。"""
 
         jobs_spec = Jobs()
-        resource_from_jobs = {
-            res for job in jobs_spec.jobs_object_list for res in job.required_resources
-        }
-        resource_from_devices = {cfg[0] for cfg in self._FIXED_DEVICE_LAYOUT.values()}
-        all_resources = sorted(resource_from_jobs | resource_from_devices)
+        resource_from_jobs = {res for job in jobs_spec.jobs_object_list for res in job.required_resources}
+        all_resources = sorted(resource_from_jobs)
 
         with self.driver.session(database=self.neo4j_database) as sess:
             # --- 跑道/停机位链 ---
@@ -249,7 +262,7 @@ class Dataset_KG(Dataset):
                     {"src": src, "dst": dst},
                 )
 
-            # --- 资源与作业 ---
+            # --- 资源与作业（图2：作业->固定设备->支持停机位）---
             for res in all_resources:
                 sess.run(
                     "MERGE (r:Resource {name:$name}) SET r.isFixed = true",  # type: ignore[arg-type]
@@ -295,6 +308,15 @@ class Dataset_KG(Dataset):
                     {"device": device_name, "resource": resource_code},
                 )
 
+                # Job -> FixedDevice 静态可用性（不与停机位直接连通，避免拥挤）
+                base_jobs = [j for j in jobs_spec.jobs_object_list if resource_code in j.required_resources]
+                for base in base_jobs:
+                    sess.run(
+                        "MATCH (j:Job {name:$job}) MATCH (d:FixedDevice {name:$dev}) "
+                        "MERGE (j)-[:JOB_CAN_USE_DEVICE]->(d)",
+                        {"job": base.code, "dev": device_name},
+                    )
+
         _logger.info(
             "Static KG ready: %d chain nodes, %d resources, %d fixed devices",  # noqa: G004
             len(self._STAND_CHAIN),
@@ -319,7 +341,7 @@ class Dataset_KG(Dataset):
         with self.driver.session(database=self.neo4j_database) as sess:
             sess.run(f"MERGE (n:{label} {{name:$name}})", {"name": name})  # type: ignore[arg-type]
         return name
-
+    # FIXME: 将资源车上时和任务分离了。
     def _add_object(self, subject_name: str, predicate_str: str, obj_value: str, obj_type_hint: str | None = None):
         """依据谓词写入 Neo4j：关系或属性。"""
         meta = self.PREDICATE_MAP.get(predicate_str)
@@ -337,6 +359,119 @@ class Dataset_KG(Dataset):
             obj_label = self._class_for_entity(obj_norm) or "Entity"
             s_label = self._class_for_entity(subject_name)
             with self.driver.session(database=self.neo4j_database) as sess:
+                # 特例：执行作业（当 subject 是飞机 且 obj 是作业编号）
+                if rel_type == "PERFORMS_JOB":  # 已不再使用（保留兼容，不会触发）
+                    # 支持两种写法：
+                    # 1) PERFORMS_JOB 对象为作业编号（如 ZY03）-> 维持原有飞机 -> 作业关系
+                    # 2) 对象为“作业_车编号”（如 ZY03_MR01/ZY10_FR5）-> 创建作业实例并绑定具体车辆
+                    m_inst = re.fullmatch(r"(ZY[A-Z0-9]+)_(FR\d{1,3}|MR\d{2})", obj_norm)
+                    if m_inst:
+                        base_job = m_inst.group(1)
+                        device_code = m_inst.group(2)
+                        # 确保基础节点
+                        sess.run("MERGE (j:Job {name:$n})", {"n": base_job})
+                        sess.run("MERGE (d:Device {name:$n})", {"n": device_code})
+                        # 作业实例（按 任务_车编号 命名）
+                        sess.run(
+                            "MERGE (ji:JobInstance {name:$name}) "
+                            "SET ji.job=$job, ji.device=$dev, ji.isFixed=false",
+                            {"name": obj_norm, "job": base_job, "dev": device_code},
+                        )
+                        # 关联：实例 -> 作业类型
+                        sess.run(
+                            "MATCH (ji:JobInstance {name:$ji}) MATCH (j:Job {name:$j}) "
+                            "MERGE (ji)-[:JOB_INSTANCE_OF]->(j)",
+                            {"ji": obj_norm, "j": base_job},
+                        )
+                        # 单值化：同一主体只保留一个作业实例
+                        if s_label:
+                            sess.run(
+                                f"MATCH (s:{s_label} {{name:$s}})-[r:PERFORMS_JOB_INSTANCE]->(x:JobInstance) "  # type: ignore[arg-type]
+                                "WHERE x.name <> $ji DELETE r",
+                                {"s": subject_name, "ji": obj_norm},
+                            )
+                        else:
+                            sess.run(
+                                "MATCH (s {name:$s})-[r:PERFORMS_JOB_INSTANCE]->(x:JobInstance) "
+                                "WHERE x.name <> $ji DELETE r",
+                                {"s": subject_name, "ji": obj_norm},
+                            )
+                        # 单值化：车辆只分配到一个作业实例
+                        sess.run(
+                            "MATCH (d:Device {name:$d})-[r:ASSIGNED_TO_JOB_INSTANCE]->(x:JobInstance) "
+                            "WHERE x.name <> $ji DELETE r",
+                            {"d": device_code, "ji": obj_norm},
+                        )
+                        # 合入关系：主体(通常为飞机) 执行 -> 作业实例
+                        if s_label:
+                            sess.run(
+                                f"MATCH (s:{s_label} {{name:$s}}) MATCH (ji:JobInstance {{name:$ji}}) "  # type: ignore[arg-type]
+                                "MERGE (s)-[:PERFORMS_JOB_INSTANCE]->(ji)",
+                                {"s": subject_name, "ji": obj_norm},
+                            )
+                        else:
+                            sess.run(
+                                "MATCH (s {name:$s}) MATCH (ji:JobInstance {name:$ji}) "
+                                "MERGE (s)-[:PERFORMS_JOB_INSTANCE]->(ji)",
+                                {"s": subject_name, "ji": obj_norm},
+                            )
+                        # 合入关系：车辆 分配 -> 作业实例
+                        sess.run(
+                            "MATCH (d:Device {name:$d}) MATCH (ji:JobInstance {name:$ji}) "
+                            "MERGE (d)-[:ASSIGNED_TO_JOB_INSTANCE]->(ji)",
+                            {"d": device_code, "ji": obj_norm},
+                        )
+                        # 兼容保留：主体 -> 作业（便于已有查询）
+                        if s_label:
+                            sess.run(
+                                f"MATCH (s:{s_label} {{name:$s}}) MATCH (j:Job {{name:$j}}) "  # type: ignore[arg-type]
+                                "MERGE (s)-[:PERFORMS_JOB]->(j)",
+                                {"s": subject_name, "j": base_job},
+                            )
+                        else:
+                            sess.run(
+                                "MATCH (s {name:$s}) MATCH (j:Job {name:$j}) MERGE (s)-[:PERFORMS_JOB]->(j)",
+                                {"s": subject_name, "j": base_job},
+                            )
+                        return
+                    else:
+                        # 若主体是设备 + 对象为作业编号 -> 自动实例化为 任务_车编号
+                        if s_label == self.Device and re.fullmatch(r"ZY[A-Z0-9]+", obj_norm):
+                            base_job = obj_norm
+                            device_code = subject_name
+                            inst_name = f"{base_job}_{device_code}"
+                            sess.run("MERGE (j:Job {name:$n})", {"n": base_job})
+                            sess.run(
+                                "MERGE (ji:JobInstance {name:$name}) SET ji.job=$job, ji.device=$dev, ji.isFixed=false",
+                                {"name": inst_name, "job": base_job, "dev": device_code},
+                            )
+                            sess.run(
+                                "MATCH (ji:JobInstance {name:$ji}) MATCH (j:Job {name:$j}) MERGE (ji)-[:JOB_INSTANCE_OF]->(j)",
+                                {"ji": inst_name, "j": base_job},
+                            )
+                            # 单值化：该设备只分配一个作业实例
+                            sess.run(
+                                "MATCH (d:Device {name:$d})-[r:ASSIGNED_TO_JOB_INSTANCE]->(x:JobInstance) WHERE x.name <> $ji DELETE r",
+                                {"d": device_code, "ji": inst_name},
+                            )
+                            sess.run(
+                                "MATCH (d:Device {name:$d}) MATCH (ji:JobInstance {name:$ji}) MERGE (d)-[:ASSIGNED_TO_JOB_INSTANCE]->(ji)",
+                                {"d": device_code, "ji": inst_name},
+                            )
+                            return
+                        # 旧行为：仅基于作业编号（主体通常为飞机）
+                        sess.run("MERGE (j:Job {name:$name})", {"name": obj_norm})
+                        if s_label:
+                            sess.run(
+                                f"MATCH (s:{s_label} {{name:$s}}) MATCH (j:Job {{name:$j}}) MERGE (s)-[:PERFORMS_JOB]->(j)",  # type: ignore[arg-type]
+                                {"s": subject_name, "j": obj_norm},
+                            )
+                        else:
+                            sess.run(
+                                "MATCH (s {name:$s}) MATCH (j:Job {name:$j}) MERGE (s)-[:PERFORMS_JOB]->(j)",
+                                {"s": subject_name, "j": obj_norm},
+                            )
+                        return
                 # 确保目标存在
                 sess.run(f"MERGE (o:{obj_label} {{name:$obj}})", {"obj": obj_norm})  # type: ignore[arg-type]
                 # 单值状态维护：当前停机位在到达时更新
@@ -428,6 +563,50 @@ class Dataset_KG(Dataset):
                             f"MATCH (s {{name:$s}}) MATCH (o:{val_label} {{name:$o}}) MERGE (s)-[:{rel_type}]->(o)",  # type: ignore[arg-type]
                             {"s": subject_name, "o": value},
                         )
+            # 3) 特判：若“动作”值形如 ZYxx 或 ZYxx_车编号，则等价映射为一次“执行作业”写入
+            if predicate_str == "动作" or predicate_str == "执行作业":
+                # 动作或执行作业文本中若检测到 任务 或 任务_车编号，进行实例化
+                action_val = value
+                pattern = r"ZY[A-Z0-9]+(?:_(FR\d{1,3}|MR\d{2}))?"
+                m = re.fullmatch(pattern, action_val)
+                if m:
+                    base_and_device = action_val
+                    m_inst = re.fullmatch(r"(ZY[A-Z0-9]+)_(FR\d{1,3}|MR\d{2})", base_and_device)
+                    with self.driver.session(database=self.neo4j_database) as sess:
+                        if m_inst:
+                            base_job = m_inst.group(1)
+                            device_code = m_inst.group(2)
+                            inst_name = base_and_device
+                            # 节点
+                            sess.run("MERGE (j:Job {name:$n})", {"n": base_job})
+                            sess.run("MERGE (d:Device {name:$n})", {"n": device_code})
+                            sess.run("MERGE (ji:JobInstance {name:$n}) SET ji.job=$job, ji.device=$dev", {"n": inst_name, "job": base_job, "dev": device_code})
+                            sess.run("MATCH (ji:JobInstance {name:$ji}) MATCH (j:Job {name:$j}) MERGE (ji)-[:JOB_INSTANCE_OF]->(j)", {"ji": inst_name, "j": base_job})
+                            # 单值：设备分配实例
+                            sess.run("MATCH (d:Device {name:$d})-[r:ASSIGNED_TO_JOB_INSTANCE]->(x:JobInstance) WHERE x.name <> $ji DELETE r", {"d": device_code, "ji": inst_name})
+                            sess.run("MATCH (d:Device {name:$d}) MATCH (ji:JobInstance {name:$ji}) MERGE (d)-[:ASSIGNED_TO_JOB_INSTANCE]->(ji)", {"d": device_code, "ji": inst_name})
+                            # 主体（飞机或设备）执行实例
+                            s_label = self._class_for_entity(subject_name)
+                            if s_label:
+                                sess.run(f"MATCH (s:{s_label} {{name:$s}})-[r:PERFORMS_JOB_INSTANCE]->(x:JobInstance) WHERE x.name <> $ji DELETE r", {"s": subject_name, "ji": inst_name})  # type: ignore[arg-type]
+                                sess.run(f"MATCH (s:{s_label} {{name:$s}}) MATCH (ji:JobInstance {{name:$ji}}) MERGE (s)-[:PERFORMS_JOB_INSTANCE]->(ji)", {"s": subject_name, "ji": inst_name})  # type: ignore[arg-type]
+                            else:
+                                sess.run("MATCH (s {name:$s})-[r:PERFORMS_JOB_INSTANCE]->(x:JobInstance) WHERE x.name <> $ji DELETE r", {"s": subject_name, "ji": inst_name})
+                                sess.run("MATCH (s {name:$s}) MATCH (ji:JobInstance {name:$ji}) MERGE (s)-[:PERFORMS_JOB_INSTANCE]->(ji)", {"s": subject_name, "ji": inst_name})
+                            # 兼容：主体 -> 作业
+                            if s_label:
+                                sess.run(f"MATCH (s:{s_label} {{name:$s}}) MATCH (j:Job {{name:$j}}) MERGE (s)-[:PERFORMS_JOB]->(j)", {"s": subject_name, "j": base_job})  # type: ignore[arg-type]
+                            else:
+                                sess.run("MATCH (s {name:$s}) MATCH (j:Job {name:$j}) MERGE (s)-[:PERFORMS_JOB]->(j)", {"s": subject_name, "j": base_job})
+                        else:
+                            # 仅作业编号（主体执行作业）
+                            base_job = base_and_device
+                            sess.run("MERGE (j:Job {name:$n})", {"n": base_job})
+                            s_label = self._class_for_entity(subject_name)
+                            if s_label:
+                                sess.run(f"MATCH (s:{s_label} {{name:$s}}) MATCH (j:Job {{name:$j}}) MERGE (s)-[:PERFORMS_JOB]->(j)", {"s": subject_name, "j": base_job})  # type: ignore[arg-type]
+                            else:
+                                sess.run("MATCH (s {name:$s}) MATCH (j:Job {name:$j}) MERGE (s)-[:PERFORMS_JOB]->(j)", {"s": subject_name, "j": base_job})
 
     # 规范化/类型推断
     def _canon_entity(self, ent: str, predicate: str | None = None) -> str:
@@ -472,6 +651,9 @@ class Dataset_KG(Dataset):
             return self.Device
         if re.fullmatch(r"R\d{3}", name):
             return self.Resource
+        # 作业/作业实例
+        if re.fullmatch(r"ZY[A-Z0-9]+_(FR\d{1,3}|MR\d{2})", name):
+            return self.JobInstance
         if re.fullmatch(r"ZY[A-Z0-9]+", name):
             return self.Job
         return None
@@ -728,11 +910,30 @@ class Dataset_KG(Dataset):
         with open(path, "w", encoding="utf-8") as f:
             f.write("# Neo4j 暂不支持直接导出 TTL。可安装 APOC，使用 apoc.export.graphml / apoc.export.csv 等功能。\n")
 
-    def export_png(self, path: str, max_edges: int | None = 400):
-        """从 Neo4j 查询全图并导出 PNG。
-        优先使用 networkx（若可用），否则自动回退到纯 matplotlib 绘制，确保在较新的依赖版本下也能稳定出图。
-        - 为避免过密，可限制最大边数；超出时随机抽样部分边。
-        - 强制使用 Agg 后端，无需显示器环境。
+    def export_png(
+        self,
+        path: str,
+        max_edges: int | None = 400,
+        *,
+        figsize: str | tuple[float, float] | None = None,
+        dpi: int = 200,
+        layout: str = "spring",
+        hide_edge_labels: bool = False,
+        node_label_font_size: int = 8,
+        edge_label_font_size: int = 7,
+        highlight_triples: list[tuple[str, str, str]] | None = None,
+    ):
+        """从 Neo4j 查询全图并导出 PNG（增强版本）。
+
+        新增参数用于缓解『图片太拥挤看不清』问题：
+        - figsize: 图尺寸，支持 "14,10" / "14x10" / (14,10) 形式；默认 12x8。
+        - dpi: 输出分辨率（默认 200）。
+        - layout: spring|kamada|circular|spectral|shell 影响节点布局。
+        - hide_edge_labels: 隐藏边标签以减少遮挡。
+        - node_label_font_size / edge_label_font_size: 字体大小可调。
+        - highlight_triples: 将本次新增的 (s,p,o) 三元组的边高亮（红色）。
+
+        兼容：保持原默认逻辑与返回结构不变；旧调用不受影响。
         """
         import math
         import random
@@ -814,7 +1015,21 @@ class Dataset_KG(Dataset):
                 return "#ff7f0e"  # 橙
             return "#7f7f7f"      # 灰
 
-        plt.figure(figsize=(12, 8))
+        # 解析 figsize
+        fig_w, fig_h = 12.0, 8.0
+        if figsize:
+            try:
+                if isinstance(figsize, tuple):
+                    fig_w, fig_h = float(figsize[0]), float(figsize[1])
+                elif isinstance(figsize, str):
+                    txt = figsize.lower().replace("x", ",")
+                    parts = [p.strip() for p in txt.split(",") if p.strip()]
+                    if len(parts) == 2:
+                        fig_w, fig_h = float(parts[0]), float(parts[1])
+            except Exception:  # noqa: BLE001
+                pass
+
+        plt.figure(figsize=(fig_w, fig_h))
 
         if nx is not None:
             # 使用 networkx 绘制
@@ -823,13 +1038,78 @@ class Dataset_KG(Dataset):
                 G.add_node(n)
             for u, v, p_str in edges:
                 G.add_edge(u, v, label=p_str)
-            pos = nx.spring_layout(G, k=0.9, seed=42)
+            # 根据布局类型选择
+            try:
+                if layout == "kamada":
+                    pos = nx.kamada_kawai_layout(G)
+                elif layout == "circular":
+                    pos = nx.circular_layout(G)
+                elif layout == "spectral":
+                    pos = nx.spectral_layout(G)
+                elif layout == "shell":
+                    pos = nx.shell_layout(G)
+                else:  # spring 默认，加自适应 k 缓解重叠
+                    # k 越大距离越远；经验缩放：基础 0.9 * log(N+1)
+                    k_base = 0.9 * math.log(len(unique_nodes) + 1, 2)
+                    pos = nx.spring_layout(G, k=k_base, seed=42)
+            except Exception:
+                pos = nx.spring_layout(G, k=0.9, seed=42)
             import matplotlib.pyplot as _plt  # type: ignore
-            nx.draw_networkx_nodes(G, pos, node_color=[node_color(n) for n in G.nodes()], node_size=600)
-            nx.draw_networkx_labels(G, pos, font_family=(chosen_family or "sans-serif"), font_size=8)
-            nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle='-|>', width=1.0, alpha=0.8)
-            edge_labels = {(u, v): d.get('label', '') for u, v, d in G.edges(data=True)}
-            nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7, font_family=(chosen_family or "sans-serif"))
+            # 节点尺寸自适应：节点越多减小
+            node_size = max(150, 9000 // max(1, len(unique_nodes)))
+            nx.draw_networkx_nodes(
+                G,
+                pos,
+                node_color=[node_color(n) for n in G.nodes()],
+                node_size=node_size,
+            )
+            nx.draw_networkx_labels(
+                G,
+                pos,
+                font_family=(chosen_family or "sans-serif"),
+                font_size=node_label_font_size,
+            )
+            # 高亮新增边：分两次绘制
+            highlight_set = set()
+            if highlight_triples:
+                for s, p, o in highlight_triples:
+                    highlight_set.add((s, o))
+            normal_edges = []
+            highlight_edges = []
+            for u, v in G.edges():
+                if (u, v) in highlight_set:
+                    highlight_edges.append((u, v))
+                else:
+                    normal_edges.append((u, v))
+            nx.draw_networkx_edges(
+                G,
+                pos,
+                edgelist=normal_edges,
+                arrows=True,
+                arrowstyle='-|>',
+                width=1.0,
+                alpha=0.6,
+            )
+            if highlight_edges:
+                nx.draw_networkx_edges(
+                    G,
+                    pos,
+                    edgelist=highlight_edges,
+                    arrows=True,
+                    arrowstyle='-|>',
+                    width=1.4,
+                    alpha=0.9,
+                    edge_color='#d62728',
+                )
+            if not hide_edge_labels:
+                edge_labels = {(u, v): d.get('label', '') for u, v, d in G.edges(data=True)}
+                nx.draw_networkx_edge_labels(
+                    G,
+                    pos,
+                    edge_labels=edge_labels,
+                    font_size=edge_label_font_size,
+                    font_family=(chosen_family or "sans-serif"),
+                )
             nodes_count = G.number_of_nodes()
             edges_count = G.number_of_edges()
         else:
@@ -845,11 +1125,20 @@ class Dataset_KG(Dataset):
             xs = [pos[n][0] for n in unique_nodes]
             ys = [pos[n][1] for n in unique_nodes]
             colors = [node_color(n) for n in unique_nodes]
-            plt.scatter(xs, ys, c=colors, s=600, edgecolors='k', linewidths=0.5)
+            node_size = max(150, 9000 // max(1, len(unique_nodes)))
+            plt.scatter(xs, ys, c=colors, s=node_size, edgecolors='k', linewidths=0.5)
 
             # 绘制标签
             for n in unique_nodes:
-                plt.text(pos[n][0], pos[n][1], n, fontsize=8, ha='center', va='center', fontfamily=(chosen_family or "sans-serif"))
+                plt.text(
+                    pos[n][0],
+                    pos[n][1],
+                    n,
+                    fontsize=node_label_font_size,
+                    ha='center',
+                    va='center',
+                    fontfamily=(chosen_family or "sans-serif"),
+                )
 
             # 绘制有向边
             for u, v, p_str in edges:
@@ -862,8 +1151,16 @@ class Dataset_KG(Dataset):
                     arrowprops=dict(arrowstyle='-|>', lw=1.0, alpha=0.8, color='#333333')
                 )
                 # 边标签放在中点稍偏移
-                mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-                plt.text(mx, my, p_str, fontsize=7, color='#444444', fontfamily=(chosen_family or "sans-serif"))
+                if not hide_edge_labels:
+                    mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+                    plt.text(
+                        mx,
+                        my,
+                        p_str,
+                        fontsize=edge_label_font_size,
+                        color='#444444',
+                        fontfamily=(chosen_family or "sans-serif"),
+                    )
 
             plt.axis('equal')
             plt.axis('off')
@@ -874,7 +1171,7 @@ class Dataset_KG(Dataset):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         try:
             plt.tight_layout()
-            plt.savefig(path, dpi=200)
+            plt.savefig(path, dpi=dpi)
             plt.close()
         except Exception as e:  # noqa: BLE001
             err = f"savefig failed: {e}"

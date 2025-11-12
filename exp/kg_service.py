@@ -89,12 +89,67 @@ class KGServiceLocal:
         except Exception:
             return {}
 
-    def export_png(self, out_png: str) -> None:
-        if hasattr(self.kg, "export_png"):
-            self.kg.export_png(out_png)
+    def export_png(self, out_png: str) -> dict | None:
+        """导出 PNG，并支持通过环境变量控制绘制参数。
+
+        环境变量（可选）：
+        - KG_EXPORT_FIGSIZE: 例如 "16,10" 或 "16x10"
+        - KG_EXPORT_DPI: 如 300
+        - KG_EXPORT_LAYOUT: spring|kamada|circular|spectral|shell
+        - KG_EXPORT_HIDE_EDGE_LABELS: "1"/"true" 隐藏边标签
+        - KG_EXPORT_NODE_FONT: 节点字体大小（int）
+        - KG_EXPORT_EDGE_FONT: 边字体大小（int）
+        - KG_EXPORT_MAX_EDGES: 单图最大边数抽样（int）
+        """
+        import os
+
+        if not hasattr(self.kg, "export_png"):
+            return None
+
+        figsize = os.environ.get("KG_EXPORT_FIGSIZE")
+        dpi = os.environ.get("KG_EXPORT_DPI")
+        layout = os.environ.get("KG_EXPORT_LAYOUT") or "spring"
+        hide_edge_labels = os.environ.get("KG_EXPORT_HIDE_EDGE_LABELS", "0").lower() in {"1", "true", "yes"}
+        node_font = os.environ.get("KG_EXPORT_NODE_FONT")
+        edge_font = os.environ.get("KG_EXPORT_EDGE_FONT")
+        max_edges = os.environ.get("KG_EXPORT_MAX_EDGES")
+
+        kw = {}
+        if figsize:
+            kw["figsize"] = figsize
+        if dpi and dpi.isdigit():
+            kw["dpi"] = int(dpi)
+        if layout:
+            kw["layout"] = layout
+        kw["hide_edge_labels"] = hide_edge_labels
+        if node_font and node_font.isdigit():
+            kw["node_label_font_size"] = int(node_font)
+        if edge_font and edge_font.isdigit():
+            kw["edge_label_font_size"] = int(edge_font)
+        if max_edges and max_edges.isdigit():
+            kw["max_edges"] = int(max_edges)
+
+        try:
+            return self.kg.export_png(out_png, **kw)
+        except TypeError:
+            # 兼容旧签名
+            return self.kg.export_png(out_png)
 
     def graph_snapshot(self) -> Dict[str, Any]:
         try:
             return self.kg.graph_snapshot() or {}
         except Exception:
             return {}
+
+    def reset_graph(self, keep_fixed: bool = True) -> None:
+        """重置底层图谱（透传）。
+
+        参数
+        ----
+        keep_fixed: 是否保留固定/初始节点。与底层 `Dataset_KG.reset_graph` 语义保持一致。
+        """
+        if hasattr(self.kg, "reset_graph"):
+            try:  # pragma: no cover - 仅防御性容错
+                self.kg.reset_graph(keep_fixed=keep_fixed)
+            except Exception:
+                pass
