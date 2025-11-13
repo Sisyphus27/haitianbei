@@ -127,6 +127,19 @@ class Exp_main(Exp_Basic):
         # KG 可视化输出目录与计数器
         self.kg_vis_dir = os.path.join(self.root, "results", "kg_vis")
         self.kg_vis_idx = 0
+        # 输出保存目录（区分大小模型）
+        self.results_out_dir = os.path.join(self.root, "results", "model_outputs")
+        self.judge_out_dir = os.path.join(self.results_out_dir, "judge")
+        self.decomp_out_dir = os.path.join(self.results_out_dir, "decomp")
+        try:
+            os.makedirs(self.judge_out_dir, exist_ok=True)
+            os.makedirs(self.decomp_out_dir, exist_ok=True)
+        except Exception:
+            pass
+        # 流式会话级文件
+        self._session_ts = None
+        self._judge_out_file = None
+        self._decomp_out_file = None
         # 统一：仅通过 KGServiceLocal 封装访问 KG；保留 self.kg 引用以兼容旧代码，但不直接使用。
         self.kg_service = None
         self.kg = None  # 兼容旧逻辑；后续请使用 self.kg_service
@@ -392,6 +405,21 @@ class Exp_main(Exp_Basic):
                 pass
 
         _logging.info("=== Stream Judge Start ===")
+        # 为当前会话准备输出文件（区分大小模型）
+        try:
+            import time as __t
+
+            self._session_ts = __t.strftime("%Y%m%d_%H%M%S", __t.localtime())
+            self._judge_out_file = os.path.join(
+                self.judge_out_dir, f"stream_{self._session_ts}.jsonl"
+            )
+            self._decomp_out_file = os.path.join(
+                self.decomp_out_dir, f"stream_{self._session_ts}.jsonl"
+            )
+            _logging.info(f"[SAVE] judge-> {self._judge_out_file}")
+            _logging.info(f"[SAVE] decomp-> {self._decomp_out_file}")
+        except Exception:
+            pass
         count = 0
         for ev, out in self.stream_judge_conflicts(
             events_iter=events,
@@ -404,7 +432,11 @@ class Exp_main(Exp_Basic):
         ):
             count += 1
             _logging.info(f"[#{count}] 事件: {ev}")
-            _logging.info(str(out))
+            # 不输出模型内容，改为提示保存路径
+            try:
+                _logging.info("[SAVE] 模型输出已写入对应 JSONL 文件（judge/decomp）")
+            except Exception:
+                pass
             _logging.info("-" * 60)
         _logging.info("=== Stream Judge End ===")
         return {"count": count}
@@ -1533,6 +1565,16 @@ class Exp_main(Exp_Basic):
             return res
         return res
 
+    # 统一的 JSONL 追加保存
+    def _append_jsonl(self, path: Optional[str], obj: dict) -> None:
+        if not path:
+            return
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     def _generate_text(
         self,
         model_dir: str,
@@ -1960,11 +2002,32 @@ class Exp_main(Exp_Basic):
                         temperature=0.0,
                     )
                     decomp_text = (d_outs[0] if d_outs else "") or ""
+                    # 保存小模型输出到 JSONL
+                    try:
+                        import json as __json
+                        import time as __t
+
+                        payload = {
+                            "ts": __t.strftime("%Y-%m-%d %H:%M:%S", __t.localtime()),
+                            "event": ev,
+                            "model": "decomposer",
+                        }
+                        try:
+                            payload["output"] = __json.loads(decomp_text)
+                        except Exception:
+                            payload["output_raw"] = decomp_text
+                        self._append_jsonl(self._decomp_out_file, payload)
+                    except Exception:
+                        pass
                 except Exception as _e:
                     decomp_text = None
             # 可选：打印分解器输出，便于人工复核
+            # 按要求不输出具体内容
             if show_decomposition and decomp_text:
-                _logging.info("【问题分解(仅展示)】\n" + decomp_text)
+                try:
+                    _logging.info("[SAVE] 分解器输出已保存到 JSONL（不在控制台展示）")
+                except Exception:
+                    pass
 
             # 主提示：附加分解结果（若有）
             extra = ("\n\n【问题分解】\n" + decomp_text) if decomp_text else ""
@@ -1999,7 +2062,7 @@ class Exp_main(Exp_Basic):
                             batch_prompts,
                             lora_adapter_dir=lora_adapter_dir,
                             use_vllm=False,  # 已尝试 vLLM，此处强制 HF
-                            max_tokens=220,
+                            max_tokens=1024,
                             temperature=0.0,
                         )
                     except (OSError, MemoryError):
@@ -2138,15 +2201,33 @@ class Exp_main(Exp_Basic):
                     outs = [_to_label(o) for o in outs]
                 # 逐条回传，并在判定后更新 KG（冲突 -> 触发 MARL 矫正并回写；否则按事件增量回写）
                 for e, o in zip(batch_events, outs):
-                    if self.kg_service is not None:
-                        parsed = self._parse_judge_output(o)
-                        # 日志：判定解析
+                    # 统一：保存大模型（judge）输出（无论是否启用KG）
+                    parsed = self._parse_judge_output(o)
+                    try:
+                        _logging.info(
+                            f"[JUDGE] compliance={parsed.get('compliance')} parsed={parsed.get('parsed')} reasons={parsed.get('reasons_len')}"
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        import json as __json
+                        import time as __t
+
+                        payload = {
+                            "ts": __t.strftime("%Y-%m-%d %H:%M:%S", __t.localtime()),
+                            "event": e,
+                            "model": "judge",
+                            "compliance": parsed.get("compliance"),
+                            "reasons_len": parsed.get("reasons_len"),
+                        }
                         try:
-                            _logging.info(
-                                f"[JUDGE] compliance={parsed.get('compliance')} parsed={parsed.get('parsed')} reasons={parsed.get('reasons_len')}"
-                            )
+                            payload["output"] = __json.loads(o) if isinstance(o, str) else o
                         except Exception:
-                            pass
+                            payload["output_raw"] = o
+                        self._append_jsonl(self._judge_out_file, payload)
+                    except Exception:
+                        pass
+                    if self.kg_service is not None:
                         # KG 交叉验证：仅当 KG 也能给出冲突理由时才触发 MARL
                         kg_reasons_cnt = 0
                         try:
@@ -2368,7 +2449,7 @@ class Exp_main(Exp_Basic):
                     return t.strip().splitlines()[0] if t.strip() else ""
 
                 outs = [_to_label(o) for o in outs]
-            if self.kg_service is not None and batch_events:
+            if batch_events:
                 for e, o in zip(batch_events, outs):
                     parsed = self._parse_judge_output(o)
                     try:
@@ -2377,64 +2458,84 @@ class Exp_main(Exp_Basic):
                         )
                     except Exception:
                         pass
-                    kg_reasons_cnt = 0
+                    # 保存大模型（judge）输出
                     try:
-                        _kg_chk = self.kg_service.check_event_conflicts(e) or {}
-                        _kg_rs = _kg_chk.get("reasons", []) or []
-                        kg_reasons_cnt = len(_kg_rs)
-                    except Exception:
-                        kg_reasons_cnt = 0
-                    try:
-                        _logging.info(f"[KGCHK] reasons={kg_reasons_cnt}")
-                    except Exception:
-                        pass
-                    trigger_policy = getattr(self.args, "marl_trigger_policy", "llm_and_kg")
-                    llm_conflict = bool(parsed.get("compliance") == "冲突")
-                    kg_conflict = bool(kg_reasons_cnt > 0)
-                    if trigger_policy == "llm_and_kg":
-                        is_conflict = llm_conflict and kg_conflict
-                    elif trigger_policy == "llm_or_kg":
-                        is_conflict = llm_conflict or kg_conflict
-                    elif trigger_policy == "llm_only":
-                        is_conflict = llm_conflict
-                    elif trigger_policy == "kg_only":
-                        is_conflict = kg_conflict
-                    else:
-                        is_conflict = llm_conflict and kg_conflict
-                    try:
-                        _logging.info(
-                            f"[MARL-TRIGGER] policy={trigger_policy} llm={llm_conflict} kg={kg_conflict} -> {is_conflict}"
-                        )
-                    except Exception:
-                        pass
-                    if is_conflict:
+                        import json as __json
+                        import time as __t
+
+                        payload = {
+                            "ts": __t.strftime("%Y-%m-%d %H:%M:%S", __t.localtime()),
+                            "event": e,
+                            "model": "judge",
+                            "compliance": parsed.get("compliance"),
+                            "reasons_len": parsed.get("reasons_len"),
+                        }
                         try:
-                            if getattr(self.kg_service, "kg", None) is not None:
-                                self._marl_rectify_and_update_kg(
-                                    self.kg_service.kg, result_name_suffix="auto"
-                                )
+                            payload["output"] = __json.loads(o) if isinstance(o, str) else o
                         except Exception:
+                            payload["output_raw"] = o
+                        self._append_jsonl(self._judge_out_file, payload)
+                    except Exception:
+                        pass
+                    if self.kg_service is not None:
+                        kg_reasons_cnt = 0
+                        try:
+                            _kg_chk = self.kg_service.check_event_conflicts(e) or {}
+                            _kg_rs = _kg_chk.get("reasons", []) or []
+                            kg_reasons_cnt = len(_kg_rs)
+                        except Exception:
+                            kg_reasons_cnt = 0
+                        try:
+                            _logging.info(f"[KGCHK] reasons={kg_reasons_cnt}")
+                        except Exception:
+                            pass
+                        trigger_policy = getattr(self.args, "marl_trigger_policy", "llm_and_kg")
+                        llm_conflict = bool(parsed.get("compliance") == "冲突")
+                        kg_conflict = bool(kg_reasons_cnt > 0)
+                        if trigger_policy == "llm_and_kg":
+                            is_conflict = llm_conflict and kg_conflict
+                        elif trigger_policy == "llm_or_kg":
+                            is_conflict = llm_conflict or kg_conflict
+                        elif trigger_policy == "llm_only":
+                            is_conflict = llm_conflict
+                        elif trigger_policy == "kg_only":
+                            is_conflict = kg_conflict
+                        else:
+                            is_conflict = llm_conflict and kg_conflict
+                        try:
+                            _logging.info(
+                                f"[MARL-TRIGGER] policy={trigger_policy} llm={llm_conflict} kg={kg_conflict} -> {is_conflict}"
+                            )
+                        except Exception:
+                            pass
+                        if is_conflict:
+                            try:
+                                if getattr(self.kg_service, "kg", None) is not None:
+                                    self._marl_rectify_and_update_kg(
+                                        self.kg_service.kg, result_name_suffix="auto"
+                                    )
+                            except Exception:
+                                try:
+                                    self.kg_service.extract_and_update(e)
+                                except Exception:
+                                    pass
+                        else:
                             try:
                                 self.kg_service.extract_and_update(e)
                             except Exception:
                                 pass
-                    else:
+                        # 可视化
                         try:
-                            self.kg_service.extract_and_update(e)
+                            import time as __t
+
+                            _kg_vis_idx += 1
+                            ts = int(__t.time())
+                            out_png = os.path.join(
+                                _kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png"
+                            )
+                            self.kg_service.export_png(out_png)
                         except Exception:
                             pass
-                    # 可视化
-                    try:
-                        import time as __t
-
-                        _kg_vis_idx += 1
-                        ts = int(__t.time())
-                        out_png = os.path.join(
-                            _kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png"
-                        )
-                        self.kg_service.export_png(out_png)
-                    except Exception:
-                        pass
                     yield (e, o)
         # 更新实例中的可视化计数器，便于后续继续追加
         self.kg_vis_idx = _kg_vis_idx
