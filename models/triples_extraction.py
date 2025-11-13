@@ -185,6 +185,11 @@ def extract_triples(text: str) -> List[Triple]:
 	for veh_no, loc in re.findall(r"(\d+号牵引车).*?待命于(着陆跑道\s*[A-Za-z0-9号]?)", text):
 		_add(triples, seen, (veh_no, "待命位置", _canon_runway_token(loc)))
 
+	# 7.1) 牵引车释放连接（显式记录为设备动作，便于可视化与审计）
+	# 例：5号牵引车释放连接。
+	for veh_no in re.findall(r"(\d+号牵引车).*?释放连接", text):
+		_add(triples, seen, (veh_no, "动作", "释放连接"))
+
 	# 8) 设备到达停机位（移动加氧车/移动加氮车/压缩空气终端/氧气终端/氮气终端 等）
 	for device, gate in re.findall(r"((?:\d+号)?(?:移动)?(?:加氧车|加氮车|压缩空气终端|氧气终端|氮气终端))到达(\d+)号停机位", text):
 		_add(triples, seen, (device, "到达停机位", f"{gate}号"))
@@ -262,6 +267,33 @@ def extract_triples(text: str) -> List[Triple]:
 			for kw, act in start_keywords:
 				if kw in text:
 					_add(triples, seen, (ac, "动作", act))
+
+		# 设备使用抽取：供液压(使用2号液压站)、供电(使用2号供电站) 等
+		# 规则：识别 “使用N号<类型>” 其中类型映射到固定设备 FRxx；生成 (飞机, 使用设备, FRxx) 三元组
+		# 类型与 FR 列表映射（按技术资料固定设备覆盖 1-6 / 7-14 / 15-22 / 23-28 的顺序）
+		resource_type_map = {
+			"液压站": ["FR25", "FR26", "FR27", "FR28"],  # R008
+			"供电站": ["FR5", "FR6", "FR7", "FR8"],      # R002
+			"清洗装置": ["FR21", "FR22", "FR23", "FR24"],  # R007
+			"供氮站": ["FR13", "FR14", "FR15", "FR16"],    # R005 / R013 混合氮气按固定加氮设备
+			"供氧站": ["FR9", "FR10", "FR11", "FR12"],     # R003
+			"供气站": ["FR17", "FR18", "FR19", "FR20"],    # R006
+			"加油站": ["FR1", "FR2", "FR3", "FR4"],        # R001
+		}
+		for num, typ in re.findall(r"使用(\d+)号(液压站|供电站|清洗装置|供氮站|供氧站|供气站|加油站)", text):
+			arr = resource_type_map.get(typ)
+			if not arr:
+				continue
+			idx = int(num)
+			# 1->0, 2->1 ... 超出映射长度则取最后一个
+			fr_code = arr[min(max(idx - 1, 0), len(arr) - 1)]
+			_add(triples, seen, (ac, "使用设备", fr_code))
+
+		# 移动设备调度："移动加氧车从6号停机位前往14号停机位" -> (移动加氧车, 滑至, 停机位14)
+		for dev, src_gate, dst_gate in re.findall(r"(移动加氧车|移动加氮车|\d+号压缩空气终端|\d+号氧气终端|\d+号氮气终端)从(\d+)号停机位前往(\d+)号停机位", text):
+			_add(triples, seen, (dev, "滑至", f"{dst_gate}号停机位"))
+			# 可选：标记目标作为到达（将由 update_with_triples 处理占用）
+			_add(triples, seen, (dev, "到达停机位", f"{dst_gate}号"))
 
 	return triples
 

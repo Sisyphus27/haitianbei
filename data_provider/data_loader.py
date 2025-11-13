@@ -164,6 +164,8 @@ class Dataset_KG(Dataset):
             # 以下为属性型谓词，同时补充“值节点关系”，便于在图中直观看到与主体的连接
             # 在写入时会：1) 将值写入主体属性；2) MERGE 值节点(label 见 val_label，name 为文本)；3) 创建 HAS_* 关系
             "动作": {"type": "prop", "prop": "action", "rel": "HAS_ACTION", "val_label": "Action"},
+            # 新增：当前任务值节点关系（为了兼容展示）；属性 current_job 已不再用于多任务场景的来源
+            "当前任务": {"type": "prop", "prop": "current_job", "rel": "HAS_CURRENT_JOB", "val_label": "JobCode"},
             "时间": {"type": "prop", "prop": "time", "rel": "HAS_TIME", "val_label": "Time"},
             "坐标": {"type": "prop", "prop": "coordinate", "rel": "HAS_COORDINATE", "val_label": "Coordinate"},
             "速度": {"type": "prop", "prop": "speed", "rel": "HAS_SPEED", "val_label": "Speed"},
@@ -171,6 +173,8 @@ class Dataset_KG(Dataset):
             # 新增：当文本包含作业编号（如 ZY03）时，可将其视为“执行作业”
             # 执行作业：兼容旧三元组，作为属性捕获原始文本 + 值节点；实例化逻辑在 _add_object 中处理
             "执行作业": {"type": "prop", "prop": "job_action", "rel": "HAS_JOB_ACTION", "val_label": "JobAction"},
+            # 新增：使用设备（固定/移动）
+            "使用设备": {"type": "rel", "rel": "USING_DEVICE"},
         }
 
         # 关系类型到中文名（用于可视化/查询展示）
@@ -185,6 +189,7 @@ class Dataset_KG(Dataset):
             "TOWS": "牵引",
             # 值节点关系（用于可视化/查询展示）
             "HAS_ACTION": "动作",
+            "HAS_CURRENT_JOB": "当前任务",
             "HAS_TIME": "时间",
             "HAS_COORDINATE": "坐标",
             "HAS_SPEED": "速度",
@@ -200,6 +205,8 @@ class Dataset_KG(Dataset):
             "PERFORMS_JOB_INSTANCE": "执行作业实例",
             "JOB_INSTANCE_OF": "作业类型",
             "ASSIGNED_TO_JOB_INSTANCE": "分配作业实例",
+            # 新增：飞机-当前作业（指向 Job）
+            "CURRENT_JOB": "当前任务",
         }
 
         # 指定哪些关系在业务上是“单值”的：同一主体该关系同时最多指向一个客体
@@ -211,6 +218,7 @@ class Dataset_KG(Dataset):
             "TARGET_GATE",        # 目标停机位（目标应唯一）
             "STANDBY_AT",         # 待命位置（唯一）
             "HAS_CURRENT_GATE",   # 当前停机位（唯一，已在到达时同步维护）
+            # 注意：CURRENT_JOB 允许并行多个，故不在单值关系集合内
             # 新增：同一时间一个飞机只执行一个作业实例；一台车只分配到一个作业实例
             "PERFORMS_JOB_INSTANCE",
             "ASSIGNED_TO_JOB_INSTANCE",
@@ -300,7 +308,7 @@ class Dataset_KG(Dataset):
                 stand_names = [f"停机位{sid}" for sid in stand_ids]
                 sess.run(
                     "MERGE (d:Device:FixedDevice {name:$name}) "
-                    "SET d.resource = $resource, d.coverage = $coverage, d.isFixed = true, d.isOccupied = false, d.isReserved = false",  # type: ignore[arg-type]
+                    "SET d.resource = $resource, d.coverage = $coverage, d.isFixed = true, d.isOccupied = false, d.isReserved = false, d.isDamaged = false",  # type: ignore[arg-type]
                     {
                         "name": device_name,
                         "resource": resource_code,
@@ -746,6 +754,8 @@ class Dataset_KG(Dataset):
 
     def update_with_triples(self, triples: list[tuple[str, str, str]]):
         """将三元组增量合入 Neo4j 图谱。"""
+        # 在一次批处理内收集需要在动作/牵引/滑行后释放跑道的飞机，最后统一释放，避免在同一事件中被后续逻辑重新占用。
+        aircraft_release_candidates: set[str] = set()
         for s, p, o in triples:
             s_c = self._canon_entity(s, None)
             # 确保主体存在
@@ -755,10 +765,20 @@ class Dataset_KG(Dataset):
             # 占用检测：若出现“设备使用飞机/作业”的语义，设置设备占用
             try:
                 subj_label = self._class_for_entity(s_c)
+                # 使用设备：主体为飞机，客体为设备（FRxx/MRxx 或包含站/装置/车关键字） -> 标记设备占用并建立 USING_DEVICE
+                if p == "使用设备" and subj_label == self.Aircraft:
+                    dev_name_raw = str(o).strip()
+                    dev_name = self._canon_entity(dev_name_raw)
+                    # 若是 FR/MR 编码或匹配站/装置关键字尝试创建/标记占用
+                    if re.fullmatch(r"FR\d{1,3}|MR\d{2}", dev_name) or re.search(r"(液压站|供电站|清洗装置|供氮站|供氧站|供气站|加油站|加氧车|加氮车|空气终端|氧气终端|氮气终端)", dev_name):
+                        self._ensure_entity(dev_name, self._class_for_entity(dev_name) or self.Device)
+                        self._set_device_occupied(dev_name, occupied=True, aircraft=s_c)
                 if subj_label == self.Device and re.fullmatch(r"FR\d{1,3}|MR\d{2}", s_c):
                     # case1: 设备 牵引 飞机 -> 占用（移动/固定均可）
                     if p == "牵引":
                         self._set_device_occupied(s_c, occupied=True, aircraft=self._canon_entity(o))
+                        # 牵引开始通常意味着飞机离开跑道，标记该被牵引飞机可释放跑道
+                        aircraft_release_candidates.add(self._canon_entity(o))
                 # case2: 文本中含有 ZYxx_FRyy 的作业实例写入已在 _add_object 内完成；这里兜底：
                 if p in {"执行作业", "动作"}:
                     val = str(o).strip()
@@ -799,6 +819,9 @@ class Dataset_KG(Dataset):
                                 self._set_runway_occupied("跑道Z", occupied=True, aircraft=s_c)
                         except Exception:
                             pass
+                    # 如果一个动作文本中出现“滑行至”/“滑行到”字样（被抽取为单一动作值），也视为离开跑道
+                    if re.search(r"滑行(?:至|到)", act):
+                        aircraft_release_candidates.add(s_c)
                 # 若动作为 ZY_Z/ZY_S/ZY_F，且主体为飞机，尝试根据当前 USES_RUNWAY 绑定的跑道占用
                 if p in {"动作", "执行作业"} and subj_label == self.Aircraft:
                     act = str(o).strip()
@@ -813,6 +836,23 @@ class Dataset_KG(Dataset):
                                 self._set_runway_occupied(str(row["r"]), occupied=True, aircraft=s_c)
                         except Exception:
                             pass
+                # 主体为飞机且谓词为“滑至/到达停机位/目标停机位/分配停机位”时，说明已进入或正在滑行到停机位，释放跑道
+                if subj_label == self.Aircraft and p in {"滑至", "到达停机位", "目标停机位", "分配停机位"}:
+                    aircraft_release_candidates.add(s_c)
+            except Exception:
+                pass
+
+        # 统一执行跑道释放（若仍存在占用关系）
+        for ac in aircraft_release_candidates:
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    row = sess.run(
+                        "MATCH (a:Aircraft {name:$a})-[:USES_RUNWAY]->(r:Runway) RETURN r.name AS r",
+                        {"a": ac},
+                    ).single()
+                if row and row.get("r"):
+                    self.release_runway(str(row["r"]))
+                    _logger.info("[RUNWAY-RELEASE] %s 离开跑道 %s (事件触发)", ac, row.get("r"))
             except Exception:
                 pass
 
@@ -820,7 +860,319 @@ class Dataset_KG(Dataset):
         """对输入文本抽取并更新图谱，返回抽取到的三元组（原始值）。"""
         triples = extract_triples(text)
         self.update_with_triples(triples)
+        # 基于原始文本进行生命周期侧写：处理抽取难以覆盖的“释放/到达起飞跑道/释放连接”等语义
+        try:
+            self._apply_lifecycle_side_effects(text, triples)
+        except Exception:
+            pass
         return triples
+
+    # ----------------------------
+    # 生命周期侧写：根据原始事件文本补充占用/释放
+    # ----------------------------
+    def _apply_lifecycle_side_effects(self, text: str, triples: list[tuple[str, str, str]]):
+        """根据完整语句补充占用/释放逻辑，覆盖以下典型场景：
+        - 牵引“释放连接”：释放对应牵引车占用并移除 TOWS 边
+        - “释放移动加氧车/加氮车”：释放与该飞机相连的对应移动设备
+        - “释放X号压缩空气终端/氧气终端/氮气终端”：释放命名终端设备
+        - “到达起飞跑道Q1”：飞机离位并占用 Q1（或 Q…）
+        - “起飞完成/已离场/跑道释放”：释放当前占用跑道
+        - “使用X号供氮/供氧/供气/加油/液压/供电站/清洗装置”：将对应设备标记占用并与飞机建立 USING_DEVICE
+        """
+        import re
+
+        # 收集本句中涉及的飞机与设备（便于匹配主体）
+        aircrafts: set[str] = set(re.findall(r"飞机([A-Za-z0-9]+)", text))
+        aircrafts = {f"飞机{a}" for a in aircrafts}
+        # 兼容简写：如“A001释放移动加氧车”
+        for a2 in re.findall(r"\b([A-Za-z0-9]+)释放(?:移动)?加(?:氧|氮)车", text):
+            aircrafts.add(f"飞机{a2}")
+
+        # 1) 牵引车 “释放连接” -> 释放该牵引车占用并删除 (牵引车)-[:TOWS]->(飞机) 边
+        m_release_conn = re.search(r"(\d+号牵引车).*?释放连接", text)
+        if m_release_conn:
+            dev_name = m_release_conn.group(1)
+            # 确保设备节点存在（避免仅有“释放连接”时节点未创建导致 SET/MATCH 无效）
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    sess.run("MERGE (d:Device {name:$d})", {"d": dev_name})
+            except Exception:
+                pass
+            self.release_device(dev_name)
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    sess.run(
+                        "MATCH (d:Device {name:$d})-[r:TOWS]->(:Aircraft) DELETE r",
+                        {"d": dev_name},
+                    )
+                    # 牵引连接释放后，若本句指明了飞机，则同步结束其转运作业 ZY_T（仅删除对应 CURRENT_JOB 边）
+                    for ac in aircrafts:
+                        sess.run(
+                            "MATCH (a:Aircraft {name:$a})-[r:CURRENT_JOB]->(j:Job {name:'ZY_T'}) DELETE r",
+                            {"a": ac},
+                        )
+            except Exception:
+                pass
+
+        # 2) “A001释放移动加氧车/加氮车” -> 释放该飞机当前 USING_DEVICE 中名称匹配的设备
+        if re.search(r"释放(?:移动)?加(?:氧|氮)车", text):
+            kinds = ["加氧车", "加氮车"]
+            for ac in aircrafts:
+                try:
+                    with self.driver.session(database=self.neo4j_database) as sess:
+                        rs = sess.run(
+                            """
+                            MATCH (a:Aircraft {name:$a})-[:USING_DEVICE]->(d:Device)
+                            RETURN d.name AS d
+                            """,
+                            {"a": ac},
+                        )
+                        for r in rs:
+                            dn = str(r.get("d", ""))
+                            if any(k in dn for k in kinds):
+                                self.release_device(dn)
+                except Exception:
+                    pass
+
+        # 3) “释放X号压缩空气终端/氧气终端/氮气终端”
+        for dn in re.findall(r"(\d+号(?:压缩空气终端|氧气终端|氮气终端))", text):
+            self.release_device(dn)
+
+        # 4) “到达起飞跑道Q1” -> 该飞机占用 Q1，并清除当前停机位
+        m_arr_takeoff = re.search(r"飞机([A-Za-z0-9]+)[^。；;]*?到达起飞跑道\s*([A-Za-z0-9]+)", text)
+        if m_arr_takeoff:
+            ac = f"飞机{m_arr_takeoff.group(1)}"
+            rtok = m_arr_takeoff.group(2).strip().upper()
+            runway = f"跑道{rtok}"
+            # 清除当前停机位
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    # 删除 HAS_CURRENT_GATE
+                    sess.run(
+                        "MATCH (a:Aircraft {name:$a})-[r:HAS_CURRENT_GATE]->(g:Stand) DELETE r",
+                        {"a": ac},
+                    )
+                    # 若该 gate 无其它飞机当前在位，则释放占用标志
+                    sess.run(
+                        """
+                        MATCH (g:Stand)
+                        WHERE NOT EXISTS { MATCH (:Aircraft)-[:HAS_CURRENT_GATE]->(g) }
+                        SET g.isOccupied=false
+                        """,
+                    )
+            except Exception:
+                pass
+            # 占用起飞跑道
+            self._set_runway_occupied(runway, occupied=True, aircraft=ac)
+
+        # 5) “起飞完成/已离场/跑道释放” -> 释放该飞机当前占用跑道
+        if re.search(r"起飞完成|已离场|跑道.*?释放", text):
+            # 若未明确指明飞机，尝试使用本句 aircrafts
+            targets = list(aircrafts)
+            # 若句子没有显式飞机ID，则查询所有仍占用跑道的飞机进行释放（保守按句）
+            if not targets:
+                try:
+                    with self.driver.session(database=self.neo4j_database) as sess:
+                        rs = sess.run(
+                            "MATCH (a:Aircraft)-[:USES_RUNWAY]->(:Runway) RETURN DISTINCT a.name AS a"
+                        )
+                        targets = [str(r.get("a")) for r in rs if r.get("a")]
+                except Exception:
+                    targets = []
+            for ac in targets:
+                try:
+                    with self.driver.session(database=self.neo4j_database) as sess:
+                        row = sess.run(
+                            "MATCH (a:Aircraft {name:$a})-[:USES_RUNWAY]->(r:Runway) RETURN r.name AS r",
+                            {"a": ac},
+                        ).single()
+                    if row and row.get("r"):
+                        self.release_runway(str(row["r"]))
+                except Exception:
+                    pass
+
+        # 5.1) “滑行结束”或“到达X号停机位” -> 结束滑行作业 ZY_M（删除对应 CURRENT_JOB 边）
+        if re.search(r"滑行结束", text) or re.search(r"到达\s*\d+号停机位", text):
+            for ac in aircrafts:
+                try:
+                    with self.driver.session(database=self.neo4j_database) as sess:
+                        sess.run(
+                            "MATCH (a:Aircraft {name:$a})-[r:CURRENT_JOB]->(j:Job {name:'ZY_M'}) DELETE r",
+                            {"a": ac},
+                        )
+                except Exception:
+                    pass
+
+    # 6) 设置当前任务：“开始X作业/启动…作业” -> 为每个命中的作业建立 (Aircraft)-[:CURRENT_JOB]->(Job{code})，支持并行多作业
+        #    保留 HAS_ACTION=气体补给 等原字段，同时细化出当前作业编码（如 ZY05 加氮）
+        job_start_map = {
+            # 保障阶段
+            r"固定(?:作业)?": "ZY01",
+            r"供液压": "ZY02",
+            r"供电": "ZY03",
+            r"加氧": "ZY04",
+            r"加氮": "ZY05",
+            r"污水(?:操作)?": "ZY06",
+            r"(?:加气|压缩空气)": "ZY07",
+            r"(?:开舱|打开舱门)": "ZY08",
+            r"清水(?:操作)?|清洁处理": "ZY09",
+            r"加(?:燃油|油)": "ZY10",
+            r"放梯": "ZY11",
+            r"装卸货|上下客": "ZY12",
+            r"空调": "ZY13",
+            r"机组检查": "ZY14",
+            r"(?:关舱|关闭舱门)": "ZY15",
+            r"飞行员登机": "ZY16",
+            r"(?:启动发动机|启动飞机发动机)": "ZY17",
+            r"暖机自检": "ZY18",
+            # 进场/转移/出场阶段
+            r"着陆": "ZY_Z",
+            r"滑行": "ZY_M",
+            r"(?:解固|解除固定)": "ZY_L",
+            r"转运": "ZY_T",
+            r"调整姿态": "ZY_S",
+            r"起飞": "ZY_F",
+        }
+        selected_codes: set[str] = set()
+        for pat, code in job_start_map.items():
+            if re.search(rf"开始[^。；;]*?(?:{pat})(?:作业)?", text):
+                selected_codes.add(code)
+        # 兼容“启动保障作业：供液压、供电、污水处理 …”类写法（一次启动多项保障作业）
+        if re.search(r"启动", text):
+            for pat, code in job_start_map.items():
+                # 仅纳入 ZY01-18 保障作业，避免将着陆/滑行/起飞纳入“启动保障作业”
+                if re.match(r"^ZY\d+", code) and re.search(pat, text):
+                    selected_codes.add(code)
+        if selected_codes and aircrafts:
+            for ac in aircrafts:
+                for code in selected_codes:
+                    try:
+                        with self.driver.session(database=self.neo4j_database) as sess:
+                            sess.run(
+                                """
+                                MATCH (a:Aircraft {name:$a})
+                                MERGE (j:Job {name:$code})
+                                MERGE (a)-[:CURRENT_JOB]->(j)
+                                """,
+                                {"a": ac, "code": code},
+                            )
+                    except Exception:
+                        pass
+
+        # 7) “使用X号供氮/供氧/供气/加油/液压/供电站/清洗装置 和/或 <移动设备>”
+        #    -> 占用对应设备并绑定 USING_DEVICE
+        # 匹配形式：使用2号供氮站和移动加氮车 / 使用2号供气站和2号压缩空气终端
+        m_use = re.search(r"使用([^；。]*)", text)
+        if m_use and aircrafts:
+            segment = m_use.group(1)
+            # 切分“和/、/,”
+            tokens = re.split(r"[和、,，]\s*", segment)
+            device_like = []
+            for tk in tokens:
+                tk = tk.strip()
+                if not tk:
+                    continue
+                if re.search(r"(供氮站|供氧站|供气站|加油站|液压站|供电站|清洗装置|加氧车|加氮车|空气终端|氧气终端|氮气终端)", tk):
+                    device_like.append(tk)
+            for ac in aircrafts:
+                for dn in device_like:
+                    self._set_device_occupied(dn, occupied=True, aircraft=ac)
+
+        # 8) 各类作业“完成” -> 释放与该飞机绑定的同类设备；并清理当前任务（允许部分完成，保留其他 CURRENT_JOB）
+        complete_map = {
+            "固定作业完成": ["固定"],
+            "着陆完成": [],
+            "加氧完成": ["供氧", "加氧车", "氧气终端"],
+            "加氮完成": ["供氮", "加氮车", "氮气终端"],
+            "加压缩空气完成": ["供气", "压缩空气终端"],
+            "污水处理完成": ["清洗装置"],
+            "清洁处理完成": ["清洗装置"],
+            "供液压完成": ["液压"],
+            "供电完成": ["供电"],
+            "加燃油完成": ["加油站", "加油"],
+            # 同义完成语句：开舱/空调
+            "开舱完成": [],
+            "打开舱门完成": [],
+            "空调完成": [],
+            "打开空调完成": [],
+            # 同义完成语句：关舱
+            "关舱完成": [],
+            "关闭舱门完成": [],
+            # 其他保障作业完成
+            "放梯完成": [],
+            "装卸货完成": [],
+            "上下客完成": [],
+            "机组检查完成": [],
+            "飞行员登机完成": [],
+            "启动发动机完成": [],
+            "启动飞机发动机完成": [],
+            "暖机自检完成": [],
+            # 转移/出场阶段完成
+            "解除固定完成": [],
+            "解固完成": [],
+            "调整姿态完成": [],
+            "起飞完成": [],
+        }
+        # 完成事件到作业编码的映射（用于 CURRENT_JOB 清理）
+        complete_code_map = {
+            "固定作业完成": "ZY01",
+            "着陆完成": "ZY_Z",
+            "加氧完成": "ZY04",
+            "加氮完成": "ZY05",
+            "加压缩空气完成": "ZY07",
+            "污水处理完成": "ZY06",
+            "清洁处理完成": "ZY09",
+            "供液压完成": "ZY02",
+            "供电完成": "ZY03",
+            "加燃油完成": "ZY10",
+            # 同义完成语句映射
+            "开舱完成": "ZY08",
+            "打开舱门完成": "ZY08",
+            "空调完成": "ZY13",
+            "打开空调完成": "ZY13",
+            "关舱完成": "ZY15",
+            "关闭舱门完成": "ZY15",
+            # 其他保障作业完成映射
+            "放梯完成": "ZY11",
+            "装卸货完成": "ZY12",
+            "上下客完成": "ZY12",
+            "机组检查完成": "ZY14",
+            "飞行员登机完成": "ZY16",
+            "启动发动机完成": "ZY17",
+            "启动飞机发动机完成": "ZY17",
+            "暖机自检完成": "ZY18",
+            # 转移/出场阶段完成映射
+            "解除固定完成": "ZY_L",
+            "解固完成": "ZY_L",
+            "调整姿态完成": "ZY_S",
+            "起飞完成": "ZY_F",
+        }
+        for key, kinds in complete_map.items():
+            if key in text and aircrafts:
+                for ac in aircrafts:
+                    try:
+                        with self.driver.session(database=self.neo4j_database) as sess:
+                            rs = sess.run(
+                                "MATCH (a:Aircraft {name:$a})-[:USING_DEVICE]->(d:Device) RETURN d.name AS d",
+                                {"a": ac},
+                            )
+                            for r in rs:
+                                dn = str(r.get("d", ""))
+                                if any(k in dn for k in kinds):
+                                    self.release_device(dn)
+                            # 清理当前任务关系（仅删除与本次完成作业匹配的 CURRENT_JOB 边）
+                            jcode = complete_code_map.get(key)
+                            if jcode:
+                                sess.run(
+                                    """
+                                    MATCH (a:Aircraft {name:$a})
+                                    OPTIONAL MATCH (a)-[r:CURRENT_JOB]->(j:Job {name:$code})
+                                    DELETE r
+                                    """,
+                                    {"a": ac, "code": jcode},
+                                )
+                    except Exception:
+                        pass
 
     # ----------------------------
     # 查询接口
