@@ -496,18 +496,29 @@ class Exp_main(Exp_Basic):
                 "冲突\n"
             )
         else:
-            # 统一规范到单一 JSON，便于稳定解析
+            # 新版要求：按“时刻”聚合输出多个“时空信息xx”，每条时空信息需携带合规判断与依据建议
+            # 统一规范到单一 JSON（或 JSON 数组），便于稳定解析
             instruction = (
-                "任务：判断以下事件是否与当前状态或规则冲突。\n"
-                "请严格只输出一个 JSON 对象（不得包含示例、解释、或 Markdown 代码围栏）。\n"
-                "JSON Schema：\n"
+                "任务：判断以下事件是否与当前状态或规则冲突；并将事件解析为按时刻聚合的多条‘时空信息’。\n"
+                "请严格只输出 JSON（不得包含示例、解释、或 Markdown 代码围栏）。\n"
+                "输出要求：可以是一个对象或一个数组（数组中每个元素是对象），其结构如下：\n"
+                "对象结构：\n"
                 "{\n"
-                '  "compliance": "合规" 或 "冲突",\n'
-                '  "reasons": [ { "rule": string, "description": string } ],  // 最多3条，若合规则可为空数组\n'
-                '  "suggestion": string  // 若合规则可写 "无"\n'
+                '  "time": "YYYY-MM-DD HH:MM:SS",   // 从事件文本中提取并归一化（如 2025年7月1日 08:00:00 -> 2025-07-01 08:00:00）\n'
+                '  "时空信息01": {\n'
+                '      "text": string,               // 对应该时刻的关键信息摘要，如“飞机A001，正在开展作业，着陆作业（速度15.2米/秒）”\n'
+                '      "compliance": "合规" | "冲突",\n'
+                '      "reasons": [ { "rule": string, "description": string } ], // 最多3条，若合规则可为空数组\n'
+                '      "suggestion": string         // 若合规则可写"无"\n'
+                '  },\n'
+                '  "时空信息02": { ... },\n'
+                '  ...\n'
                 "}\n"
-                "注意：只能输出一个 JSON；不要输出示例 Schema、不要输出 ```json 代码块。\n"
-                "reasons 不得重复、不得虚构规则。\n"
+                "注意事项：\n"
+                "- 仅依据提供的规则文档与KG状态，不得虚构；\n"
+                "- 若无法从文本中提取精确时刻，可将原文时刻规范化后填写；\n"
+                "- 若该事件仅包含一个时刻，仍按上述结构输出一个对象；\n"
+                "- 不要输出除 JSON 外的任何文本；不要使用 ```json 代码块。\n"
             )
         parts = [rules_text, kg_text, "【事件】\n" + event_text, instruction]
         return "\n\n".join([p for p in parts if p])
@@ -1421,6 +1432,7 @@ class Exp_main(Exp_Basic):
             return last_obj
 
         obj = _scan_last_json(s)
+        # 1) 兼容旧版：平面 JSON，包含全局 compliance
         if isinstance(obj, dict):
             comp = str(obj.get("compliance", "")).strip()
             if comp in ("合规", "冲突"):
@@ -1430,6 +1442,63 @@ class Exp_main(Exp_Basic):
                 if isinstance(rs, list):
                     res["reasons_len"] = len(rs)
                 return res
+            # 2) 新版：按时刻聚合的对象（含 time 与 多个“时空信息xx”）
+            # 统计所有“时空信息xx”中的合规与依据条数
+            try:
+                if "time" in obj:
+                    any_conflict = False
+                    reasons_cnt = 0
+                    for k, v in obj.items():
+                        if isinstance(k, str) and k.startswith("时空信息") and isinstance(v, dict):
+                            c = str(v.get("compliance", "")).strip()
+                            if c == "冲突":
+                                any_conflict = True
+                            rs = v.get("reasons", [])
+                            if isinstance(rs, list):
+                                reasons_cnt += len(rs)
+                    # 若检测到该结构，则据此给出全局判断
+                    if reasons_cnt > 0 or any_conflict or any(
+                        isinstance(k, str) and k.startswith("时空信息") for k in obj.keys()
+                    ):
+                        res["parsed"] = True
+                        res["compliance"] = "冲突" if any_conflict else "合规"
+                        res["reasons_len"] = reasons_cnt
+                        return res
+            except Exception:
+                pass
+        # 3) 新版数组：[{time, 时空信息..}, ...]
+        if isinstance(obj, list):
+            try:
+                any_conflict = False
+                reasons_cnt = 0
+                seen_any = False
+                for item in obj:
+                    if isinstance(item, dict):
+                        # 直接兼容平面 JSON
+                        c0 = str(item.get("compliance", "")).strip()
+                        if c0 in ("合规", "冲突"):
+                            seen_any = True
+                            any_conflict = any_conflict or (c0 == "冲突")
+                            rs0 = item.get("reasons", [])
+                            if isinstance(rs0, list):
+                                reasons_cnt += len(rs0)
+                        # 兼容“时空信息xx”结构
+                        for k, v in item.items():
+                            if isinstance(k, str) and k.startswith("时空信息") and isinstance(v, dict):
+                                seen_any = True
+                                c = str(v.get("compliance", "")).strip()
+                                if c == "冲突":
+                                    any_conflict = True
+                                rs = v.get("reasons", [])
+                                if isinstance(rs, list):
+                                    reasons_cnt += len(rs)
+                if seen_any:
+                    res["parsed"] = True
+                    res["compliance"] = "冲突" if any_conflict else "合规"
+                    res["reasons_len"] = reasons_cnt
+                    return res
+            except Exception:
+                pass
 
         only = s.replace("\u3000", " ").strip()
         if only in ("合规", "冲突"):

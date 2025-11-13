@@ -111,7 +111,18 @@ def extract_triples(text: str) -> List[Triple]:
 
 	# 2) 飞机ID（可多架）
 	aircraft_ids = [f"飞机{m}" for m in re.findall(r"飞机([A-Za-z0-9]+)", text)]
-	# 若未显式出现“飞机X”，可为空
+	# 若未显式出现“飞机X”，尝试兜底匹配裸露的飞机代号（如“A001”）
+	# 为避免误匹配设备编号（如 MR10），此处仅匹配以字母 A 开头且后随 3-4 位数字的代号。
+	if not aircraft_ids:
+		# 注意：
+		# - 飞机编号范围 AXXX..EXXX（字母 A-E），XXX 为数字（常为 3 位或 4 位）。
+		# - 为避免匹配到设备编号（如 MR10），仅匹配首字母 A-E 后跟 3-4 位数字。
+		# - 在构造实体名时统一为大写形式（飞机A001），但保留原文别名作为桥接。
+		bare_ac = re.findall(r"[A-Ea-e]\d{3,4}", text)
+		for ac in bare_ac:
+			ac_norm = ac.upper()
+			_add(triples, seen, (f"飞机{ac_norm}", "别名", ac))  # 添加别名以便下游规范化
+			aircraft_ids.append(f"飞机{ac_norm}")
 
 	# 3) 动作关键词（根据语料扩充）
 	# 说明：为尽量覆盖训练集中的地面保障动作，这里列出常见关键字；
@@ -194,9 +205,23 @@ def extract_triples(text: str) -> List[Triple]:
 	for device, gate in re.findall(r"((?:\d+号)?(?:移动)?(?:加氧车|加氮车|压缩空气终端|氧气终端|氮气终端))到达(\d+)号停机位", text):
 		_add(triples, seen, (device, "到达停机位", f"{gate}号"))
 
+	# 8.1) 设备释放（飞机或系统释放移动/终端设备）
+	# 示例：A001释放移动加氧车/加氮车；A001释放2号压缩空气终端
+	if re.search(r"释放移动加氧车/加氮车", text):
+		_add(triples, seen, ("移动加氧车", "动作", "释放"))
+		_add(triples, seen, ("移动加氮车", "动作", "释放"))
+	for dev in re.findall(r"释放\s*((?:\d+号)?(?:移动)?(?:加氧车|加氮车|压缩空气终端|氧气终端|氮气终端))", text):
+		_add(triples, seen, (dev, "动作", "释放"))
+
 	# 9) 分配停机位 -> 飞机
 	for gate, ac_id in re.findall(r"分配(\d+)号停机位给飞机([A-Za-z0-9]+)", text):
 		_add(triples, seen, (f"飞机{ac_id}", "分配停机位", f"{gate}号"))
+
+	# 8.2) 移动设备调度（与飞机无关，应在飞机循环外抽取）
+	# 示例：调度移动加氧车从14号停机位前往7号停机位(距离208.8米，预计70秒)
+	for dev, src_gate, dst_gate in re.findall(r"(移动加氧车|移动加氮车|\d+号压缩空气终端|\d+号氧气终端|\d+号氮气终端)从(\d+)号停机位前往(\d+)号停机位", text):
+		_add(triples, seen, (dev, "滑至", f"{dst_gate}号停机位"))
+		_add(triples, seen, (dev, "到达停机位", f"{dst_gate}号"))
 
 	# 将“动作/跑道/坐标/速度/时间”赋予到每一架匹配到的飞机；若无飞机但存在动作等，则跳过与飞机绑定的项
 	for ac in aircraft_ids:
@@ -289,11 +314,7 @@ def extract_triples(text: str) -> List[Triple]:
 			fr_code = arr[min(max(idx - 1, 0), len(arr) - 1)]
 			_add(triples, seen, (ac, "使用设备", fr_code))
 
-		# 移动设备调度："移动加氧车从6号停机位前往14号停机位" -> (移动加氧车, 滑至, 停机位14)
-		for dev, src_gate, dst_gate in re.findall(r"(移动加氧车|移动加氮车|\d+号压缩空气终端|\d+号氧气终端|\d+号氮气终端)从(\d+)号停机位前往(\d+)号停机位", text):
-			_add(triples, seen, (dev, "滑至", f"{dst_gate}号停机位"))
-			# 可选：标记目标作为到达（将由 update_with_triples 处理占用）
-			_add(triples, seen, (dev, "到达停机位", f"{dst_gate}号"))
+		# （已前移到飞机循环外）
 
 	return triples
 
