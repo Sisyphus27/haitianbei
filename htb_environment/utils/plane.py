@@ -5,7 +5,7 @@
 """
 # utils/plane.py
 import numpy as np
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Any
 from utils.task import Task, Job
 
 
@@ -45,6 +45,10 @@ class Plane:
         self.move_last_min: float = 0.0
         self.proc_last_min: float = 0.0
         self.move_code: Optional[str] = None
+        # ==== 扩展的调度环境临时字段（并行/设备/移动占用句柄）====
+        self._last_handles: List[Any] = []          # 最近一次作业占用的设备句柄列表
+        self._active_jobs: Optional[List[Job]] = None  # 并行开工的作业集合
+        self._move_handles: Optional[List[Any]] = None # 正在移动阶段锁定的设备集合（牵引车等）
 
 
     @property

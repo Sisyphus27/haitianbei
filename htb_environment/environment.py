@@ -1,7 +1,7 @@
 # environment.py
 import numpy as np
-from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional, Set
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple, Optional, Set, cast
 
 from utils.util import count_path_on_road
 from utils.job import Jobs, Job
@@ -19,11 +19,7 @@ class FixedDevice:
     cover_stands: Set[int]
     # FIXME:按照勘误修改为2 
     capacity: int = 2
-    in_use: Set[int] = None
-
-    def __post_init__(self):
-        if self.in_use is None:
-            self.in_use = set()
+    in_use: Set[int] = field(default_factory=set)
 
     def can_serve(self, stand_id: int) -> bool:
         return (stand_id in self.cover_stands) and (len(self.in_use) < self.capacity)
@@ -49,6 +45,8 @@ class ScheduleEnv:
 
     def __init__(self, args=None):
         self.args = args
+        # 可选：与 KG 同步占用（由外部注入 KGServiceLocal 实例）
+        self.kg_service = getattr(args, "kg_service", None) if args is not None else None
         # 作业/任务库
         self.jobs_obj = Jobs()
         self.task_obj = Task()
@@ -124,6 +122,48 @@ class ScheduleEnv:
         self.episodes_situation: List[Tuple[float,
                                             int, int, int, float, float]] = []
         self.episode_devices: List[Dict[str, list]] = []
+
+    # ============ KG 占用同步（可选） ============
+    def set_kg_service(self, kg_service):
+        """外部注入 KGServiceLocal，便于同步固定设备占用到知识图谱。"""
+        self.kg_service = kg_service
+
+    def _kg_occupy_fixed(self, dev_id: str, plane, job):
+        try:
+            if self.kg_service is None:
+                return
+            # aircraft 命名与 KG 约定：飞机<编号>
+            aircraft_name = f"飞机{getattr(plane, 'plane_id', '')}"
+            job_code = getattr(job, 'code', None)
+            self.kg_service.occupy_device(dev_id, aircraft=aircraft_name, job_code=job_code)
+        except Exception:
+            pass
+
+    def _kg_release_fixed(self, dev_id: str):
+        try:
+            if self.kg_service is None:
+                return
+            self.kg_service.release_device(dev_id)
+        except Exception:
+            pass
+
+    # 跑道占用同步
+    def _kg_occupy_runway(self, runway_name: str, plane):
+        try:
+            if self.kg_service is None:
+                return
+            aircraft_name = f"飞机{getattr(plane, 'plane_id', '')}"
+            self.kg_service.occupy_runway(runway_name, aircraft=aircraft_name)
+        except Exception:
+            pass
+
+    def _kg_release_runway(self, runway_name: str):
+        try:
+            if self.kg_service is None:
+                return
+            self.kg_service.release_runway(runway_name)
+        except Exception:
+            pass
 
     # ============ 基础时间计算 ============
     def _sec_to_min(self, sec: float) -> float:
@@ -309,31 +349,29 @@ class ScheduleEnv:
         handles: List[object] = []
         for kind, obj, _ in plans:
             if kind == "fixed_now":
-                rt = obj  # obj 是 rtype 字符串
+                rt = cast(str, obj)  # obj 是 rtype 字符串
                 pool = next(
-                    (d for d in self.fixed_devices if d.rtype ==
-                    rt and d.can_serve(stand_id)),
+                    (d for d in self.fixed_devices if d.rtype == rt and d.can_serve(stand_id)),
                     None
                 )
                 if pool is not None:
                     pool.in_use.add(plane.plane_id)
                     handles.append(pool)
+                    # 同步至 KG：固定设备占用
+                    self._kg_occupy_fixed(pool.dev_id, plane, job)
                 else:
                     # 重新评估：等固定 vs 用移动 → 取等待时间更短的（平手偏向移动）
                     eta_fix2 = self._eta_fixed_available(rt, stand_id)
                     best_m2, eta_mob2 = None, float("inf")
                     for m in self.mobile_devices:
                         if m.rtype == rt and m.locked_by is None:
-                            from_pos = self.sites[m.loc_stand -
-                                                1].absolute_position
+                            from_pos = self.sites[m.loc_stand - 1].absolute_position
                             eta = m.eta_to_min(from_pos, site_pos, now)
                             if eta < eta_mob2:
                                 eta_mob2, best_m2 = eta, m
 
-                    dt_fix = (
-                        eta_fix2 - now) if eta_fix2 < float("inf") else float("inf")
-                    dt_mob = (
-                        eta_mob2 - now) if best_m2 is not None else float("inf")
+                    dt_fix = (eta_fix2 - now) if eta_fix2 < float("inf") else float("inf")
+                    dt_mob = (eta_mob2 - now) if best_m2 is not None else float("inf")
 
                     if dt_mob <= dt_fix:
                         if best_m2 is None:
@@ -348,7 +386,7 @@ class ScheduleEnv:
                         return False, 0.0, []
 
             elif kind == "mobile":
-                m: MobileDevice = obj
+                m = cast(MobileDevice, obj)
                 if m.locked_by is None:
                     m.locked_by = plane.plane_id
                     handles.append(m)
@@ -357,8 +395,7 @@ class ScheduleEnv:
                     best_m2, eta2 = None, float("inf")
                     for mm in self.mobile_devices:
                         if mm.rtype == m.rtype and mm.locked_by is None:
-                            from_pos = self.sites[mm.loc_stand -
-                                                1].absolute_position
+                            from_pos = self.sites[mm.loc_stand - 1].absolute_position
                             eta = mm.eta_to_min(from_pos, site_pos, now)
                             if eta < eta2:
                                 eta2, best_m2 = eta, mm
@@ -379,6 +416,8 @@ class ScheduleEnv:
         for h in handles or []:
             if isinstance(h, FixedDevice):
                 h.in_use.discard(plane.plane_id)
+                # 同步至 KG：固定设备释放
+                self._kg_release_fixed(h.dev_id)
             elif isinstance(h, MobileDevice):
                 h.busy_until_min = self.current_time
                 h.locked_by = None
@@ -690,6 +729,8 @@ class ScheduleEnv:
                 self.episode_devices.append({"FixedDevices": [], "MobileDevices": []})
 
                 plane.start_job(job, proc_min)
+                # KG：占用“跑道Z”
+                self._kg_occupy_runway("跑道Z", plane)
                 self.landing_busy_until = self.current_time + \
                     proc_min + self.landing_sep_min  # 落地占道+间隔
                 just_landed[pid] = True
@@ -735,7 +776,8 @@ class ScheduleEnv:
                     if mv == "ZY_T":
                         jobT = self.jobs_obj.get_job("ZY_T")
                         # 牵引车先到“当前站位”再牵引到“目标站位”
-                        from_site = self.sites[self.planes[pid].current_site_id] if self.planes[pid].current_site_id is not None else None
+                        cur_idx = self.planes[pid].current_site_id
+                        from_site = self.sites[cur_idx] if cur_idx is not None else None
                         if from_site is None:
                             # 没有明确的 from_site（极端情况），退化为不可执行
                             continue
@@ -806,8 +848,9 @@ class ScheduleEnv:
                     plane.status = "IDLE"
                     # 释放牵引车等移动设备；把它们的位置更新为“目的站位”
                     if getattr(plane, "_move_handles", None):
-                        self._release_resources(
-                            plane._move_handles, plane, site_cur.site_id)
+                        if site_cur is not None:
+                            self._release_resources(
+                                plane._move_handles or [], plane, site_cur.site_id)
                         plane._move_handles = None
                     plane.move_code = None
 
@@ -873,6 +916,9 @@ class ScheduleEnv:
                                     {"FixedDevices": fix_ids, "MobileDevices": mob_ids})
 
                                 plane.start_job(job_for_site, proc_min)
+                                # 若在跑道位开工，KG 占用对应跑道
+                                if site_cur.is_runway:
+                                    self._kg_occupy_runway(f"跑道{site_cur.site_id}", plane)
                                 if not site_cur.is_runway:
                                     self.stand_current_occupancy[site_cur.site_id] = pid
                                 if self.enable_long_occupy and job_for_site.code in ("ZY03", "ZY02") and job_for_site.required_resources:
@@ -909,6 +955,9 @@ class ScheduleEnv:
                     if not site_cur.is_runway:
                         # ★ 并行也要占位！
                         self.stand_current_occupancy[site_cur.site_id] = pid
+                    else:
+                        # 在跑道位并行开工，KG 占用对应跑道
+                        self._kg_occupy_runway(f"跑道{site_cur.site_id}", plane)
                     inst_reward += self.bonus_parallel_per_job * (len(accepted) - 1)
 
 
@@ -918,11 +967,11 @@ class ScheduleEnv:
                 # 先释放设备（句柄可能不存在/为空，统一容错）
                 cur_site_id = self.sites[plane.current_site_id].site_id if plane.current_site_id is not None else 1
                 self._release_resources(
-                    getattr(plane, "_last_handles", None), plane, cur_site_id)
+                    getattr(plane, "_last_handles", []) or [], plane, cur_site_id)
 
                 # 这一步完成的作业集合（并行 or 单作业）
                 finished_codes = []
-                if getattr(plane, "_active_jobs", None):
+                if plane._active_jobs is not None:
                     finished_codes = [j.code for j in plane._active_jobs]
                 elif plane.current_job_code:
                     finished_codes = [plane.current_job_code]
@@ -936,6 +985,9 @@ class ScheduleEnv:
                     # 特殊：加油置满
                     if code == "ZY10":
                         plane.fuel_percent = 100.0
+                    # KG：落地完成，释放“跑道Z”
+                    if code == "ZY_Z":
+                        self._kg_release_runway("跑道Z")
 
                     job_obj = self.jobs_obj.get_job(code)
                     if job_obj and getattr(job_obj, "group", "") == "出场":
@@ -953,6 +1005,8 @@ class ScheduleEnv:
                         self.last_leave_time_by_stand[sid] = self.current_time
                     if any_outbound and sid in (29, 30, 31):
                         self.last_leave_time_by_runway[sid] = self.current_time
+                        # KG：出场作业完成，释放对应跑道
+                        self._kg_release_runway(f"跑道{sid}")
 
                 # 长占清理
                 if self.enable_long_occupy and ("ZY15" in finished_codes):

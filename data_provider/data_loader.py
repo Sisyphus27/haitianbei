@@ -241,7 +241,8 @@ class Dataset_KG(Dataset):
 
         jobs_spec = Jobs()
         resource_from_jobs = {res for job in jobs_spec.jobs_object_list for res in job.required_resources}
-        all_resources = sorted(resource_from_jobs)
+        resource_from_fr = {spec[0] for spec in self._FIXED_DEVICE_LAYOUT.values()}
+        all_resources = sorted(resource_from_jobs | resource_from_fr)
 
         with self.driver.session(database=self.neo4j_database) as sess:
             # --- 跑道/停机位链 ---
@@ -251,6 +252,12 @@ class Dataset_KG(Dataset):
                     f"MERGE (n:{label} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
                     {"name": node_name},
                 )
+                # 跑道/停机位 设初始占用/预占用标志（布尔），默认为未占用/未预占
+                if label in {self.Runway, self.Gate}:
+                    sess.run(
+                        f"MATCH (n:{label} {{name:$name}}) SET n.isOccupied = false, n.isReserved = false",  # type: ignore[arg-type]
+                        {"name": node_name},
+                    )
 
             for src, dst in zip(self._STAND_CHAIN, self._STAND_CHAIN[1:]):
                 src_label = self._class_for_entity(src) or "Entity"
@@ -265,7 +272,7 @@ class Dataset_KG(Dataset):
             # --- 资源与作业（图2：作业->固定设备->支持停机位）---
             for res in all_resources:
                 sess.run(
-                    "MERGE (r:Resource {name:$name}) SET r.isFixed = true",  # type: ignore[arg-type]
+                    "MERGE (r:Resource {name:$name}) SET r.isFixed = true, r.isReserved = false",  # type: ignore[arg-type]
                     {"name": res},
                 )
 
@@ -293,7 +300,7 @@ class Dataset_KG(Dataset):
                 stand_names = [f"停机位{sid}" for sid in stand_ids]
                 sess.run(
                     "MERGE (d:Device:FixedDevice {name:$name}) "
-                    "SET d.resource = $resource, d.coverage = $coverage, d.isFixed = true",  # type: ignore[arg-type]
+                    "SET d.resource = $resource, d.coverage = $coverage, d.isFixed = true, d.isOccupied = false, d.isReserved = false",  # type: ignore[arg-type]
                     {
                         "name": device_name,
                         "resource": resource_code,
@@ -308,6 +315,13 @@ class Dataset_KG(Dataset):
                     {"device": device_name, "resource": resource_code},
                 )
 
+                # 设备覆盖的停机位（边关系，便于图查询）
+                for gate_name in stand_names:
+                    sess.run(
+                        "MATCH (d {name:$dev}) MATCH (g {name:$gate}) MERGE (d)-[:COVERS_STAND]->(g)",
+                        {"dev": device_name, "gate": gate_name},
+                    )
+
                 # Job -> FixedDevice 静态可用性（不与停机位直接连通，避免拥挤）
                 base_jobs = [j for j in jobs_spec.jobs_object_list if resource_code in j.required_resources]
                 for base in base_jobs:
@@ -318,9 +332,10 @@ class Dataset_KG(Dataset):
                     )
 
         _logger.info(
-            "Static KG ready: %d chain nodes, %d resources, %d fixed devices",  # noqa: G004
-            len(self._STAND_CHAIN),
+            "Static KG (device-centric) ready: stands=%d, resources=%d, jobs=%d, fixed_devices=%d",
+            1 + 28 + 3,  # 跑道Z + 1..28 + 跑道29/30/31（仅用于日志估计）
             len(all_resources),
+            len(jobs_spec.jobs_object_list),
             len(self._FIXED_DEVICE_LAYOUT),
         )
 
@@ -421,6 +436,11 @@ class Dataset_KG(Dataset):
                             "MERGE (d)-[:ASSIGNED_TO_JOB_INSTANCE]->(ji)",
                             {"d": device_code, "ji": obj_norm},
                         )
+                        # 作业实例分配即视为设备预占用
+                        sess.run(
+                            "MATCH (d:Device {name:$d}) SET d.isReserved=true WHERE coalesce(d.isFixed,true)",
+                            {"d": device_code},
+                        )
                         # 兼容保留：主体 -> 作业（便于已有查询）
                         if s_label:
                             sess.run(
@@ -458,6 +478,11 @@ class Dataset_KG(Dataset):
                                 "MATCH (d:Device {name:$d}) MATCH (ji:JobInstance {name:$ji}) MERGE (d)-[:ASSIGNED_TO_JOB_INSTANCE]->(ji)",
                                 {"d": device_code, "ji": inst_name},
                             )
+                            # 作业实例分配即视为设备预占用
+                            sess.run(
+                                "MATCH (d:Device {name:$d}) SET d.isReserved=true WHERE coalesce(d.isFixed,true)",
+                                {"d": device_code},
+                            )
                             return
                         # 旧行为：仅基于作业编号（主体通常为飞机）
                         sess.run("MERGE (j:Job {name:$name})", {"name": obj_norm})
@@ -476,6 +501,22 @@ class Dataset_KG(Dataset):
                 sess.run(f"MERGE (o:{obj_label} {{name:$obj}})", {"obj": obj_norm})  # type: ignore[arg-type]
                 # 单值状态维护：当前停机位在到达时更新
                 if predicate_str == "到达停机位":
+                    # 记录该主体到达前的当前停机位（用于后续清理占用标志）
+                    prev_gates: list[str] = []
+                    if s_label:
+                        prev_rows = sess.run(
+                            f"MATCH (s:{s_label} {{name:$s}})-[:HAS_CURRENT_GATE]->(g:Stand) RETURN g.name AS g",  # type: ignore[arg-type]
+                            {"s": subject_name},
+                        )
+                    else:
+                        prev_rows = sess.run(
+                            "MATCH (s {name:$s})-[:HAS_CURRENT_GATE]->(g:Stand) RETURN g.name AS g",
+                            {"s": subject_name},
+                        )
+                    try:
+                        prev_gates = [str(r["g"]) for r in prev_rows]
+                    except Exception:
+                        prev_gates = []
                     # 先删除已有 HAS_CURRENT_GATE
                     if s_label:
                         sess.run(
@@ -497,6 +538,32 @@ class Dataset_KG(Dataset):
                         sess.run(
                             "MATCH (s {name:$s}) MATCH (o:Stand {name:$o}) MERGE (s)-[:HAS_CURRENT_GATE]->(o)",
                             {"s": subject_name, "o": obj_norm},
+                        )
+                    # 设置新停机位为占用
+                    sess.run(
+                        "MATCH (g:Stand {name:$g}) SET g.isOccupied=true",
+                        {"g": obj_norm},
+                    )
+                    # 清理：无分配/目标且未占用的停机位不应标记预占用
+                    sess.run(
+                        """
+                        MATCH (g:Stand)
+                        WHERE NOT ( (:Aircraft)-[:ASSIGNED_GATE|:TARGET_GATE]->(g) )
+                          AND coalesce(g.isOccupied,false)=false
+                                                SET g.isReserved=false
+                                                """
+                                        )
+                    # 尝试释放此前的停机位占用标志（若不再有任何飞机当前在该位）
+                    for pg in prev_gates:
+                        sess.run(
+                            """
+                            MATCH (g:Stand {name:$g})
+                            OPTIONAL MATCH (:Aircraft)-[:HAS_CURRENT_GATE]->(g)
+                            WITH g, count(*) AS c
+                            WHERE c = 0
+                            SET g.isOccupied=false
+                            """,
+                            {"g": pg},
                         )
                 # 冲突处理：对于单值关系，若已存在指向其它客体的边，先删除后再合入
                 if rel_type in self.SINGLE_VALUED_RELS:
@@ -521,6 +588,22 @@ class Dataset_KG(Dataset):
                         f"MATCH (s {{name:$s}}) MATCH (o:{obj_label} {{name:$o}}) MERGE (s)-[r:{rel_type}]->(o)",  # type: ignore[arg-type]
                         {"s": subject_name, "o": obj_norm},
                     )
+                # 预占逻辑：分配 / 目标 / 待命 指向停机位或设备时设置 isReserved=true
+                if predicate_str in {"分配停机位", "目标停机位"} and obj_label == self.Gate:
+                    sess.run(
+                        "MATCH (g:Stand {name:$g}) SET g.isReserved=true",
+                        {"g": obj_norm},
+                    )
+                    # 清理：无分配/目标且未占用的停机位不应标记预占用
+                    sess.run(
+                        """
+                        MATCH (g:Stand)
+                        WHERE NOT ( (:Aircraft)-[:ASSIGNED_GATE|:TARGET_GATE]->(g) )
+                          AND coalesce(g.isOccupied,false)=false
+                        SET g.isReserved=false
+                        """
+                    )
+                # 若为作业资源分配，可在未来扩展：例如 PERFORMS_JOB 时涉及设备预占
         else:
             # 属性更新为单值 +（可选）值节点关系
             prop = meta["prop"]
@@ -669,6 +752,69 @@ class Dataset_KG(Dataset):
             self._ensure_entity(s_c, self._class_for_entity(s_c))
             # 写入关系/属性
             self._add_object(s_c, p, o)
+            # 占用检测：若出现“设备使用飞机/作业”的语义，设置设备占用
+            try:
+                subj_label = self._class_for_entity(s_c)
+                if subj_label == self.Device and re.fullmatch(r"FR\d{1,3}|MR\d{2}", s_c):
+                    # case1: 设备 牵引 飞机 -> 占用（移动/固定均可）
+                    if p == "牵引":
+                        self._set_device_occupied(s_c, occupied=True, aircraft=self._canon_entity(o))
+                # case2: 文本中含有 ZYxx_FRyy 的作业实例写入已在 _add_object 内完成；这里兜底：
+                if p in {"执行作业", "动作"}:
+                    val = str(o).strip()
+                    m_inst = re.fullmatch(r"(ZY[A-Z0-9]+)_(FR\d{1,3}|MR\d{2})", val)
+                    if m_inst:
+                        dev = m_inst.group(2)
+                        self._set_device_occupied(dev, occupied=True, aircraft=s_c if (subj_label == self.Aircraft) else None)
+                # 跑道占用：使用/着陆跑道 -> 标记跑道占用，并绑定对应飞机
+                if p in {"使用跑道", "着陆跑道"} and subj_label == self.Aircraft:
+                    runway = self._canon_entity(o, p)
+                    self._set_runway_occupied(runway, occupied=True, aircraft=s_c)
+                # 当出现“着陆完成”动作时，不立即释放跑道：保持占用直到后续滑行/离开逻辑显式释放。
+                # 若出现“滑行”相关动作，说明飞机开始离开跑道，可释放当前绑定跑道占用（如果仍标记）。
+                if p in {"动作", "执行作业"} and subj_label == self.Aircraft:
+                    act = str(o).strip()
+                    # 释放条件：滑行开始 (滑行 / 滑行至 / 滑行结束 之前已经离开跑道)
+                    if act in {"滑行", "滑行结束"}:
+                        try:
+                            with self.driver.session(database=self.neo4j_database) as sess:
+                                row = sess.run(
+                                    "MATCH (a:Aircraft {name:$a})-[:USES_RUNWAY]->(r:Runway) RETURN r.name AS r",
+                                    {"a": s_c},
+                                ).single()
+                            if row and row.get("r"):
+                                # 释放占用与关系
+                                self.release_runway(str(row["r"]))
+                        except Exception:
+                            pass
+                    # 着陆完成时：默认占用着陆跑道Z（若尚未建立绑定关系），直到滑行开始释放
+                    if act == "着陆完成":
+                        try:
+                            with self.driver.session(database=self.neo4j_database) as sess:
+                                row = sess.run(
+                                    "MATCH (a:Aircraft {name:$a})-[:USES_RUNWAY]->(r:Runway) RETURN r.name AS r",
+                                    {"a": s_c},
+                                ).single()
+                            if not row or not row.get("r"):
+                                self._set_runway_occupied("跑道Z", occupied=True, aircraft=s_c)
+                        except Exception:
+                            pass
+                # 若动作为 ZY_Z/ZY_S/ZY_F，且主体为飞机，尝试根据当前 USES_RUNWAY 绑定的跑道占用
+                if p in {"动作", "执行作业"} and subj_label == self.Aircraft:
+                    act = str(o).strip()
+                    if re.fullmatch(r"ZY_(?:Z|S|F)|ZYZ|ZYS|ZYF|ZYZ|ZYF", act) or act in {"ZY_Z", "ZY_S", "ZY_F"}:
+                        try:
+                            with self.driver.session(database=self.neo4j_database) as sess:
+                                row = sess.run(
+                                    "MATCH (a:Aircraft {name:$a})-[:USES_RUNWAY]->(r:Runway) RETURN r.name AS r",
+                                    {"a": s_c},
+                                ).single()
+                            if row and row.get("r"):
+                                self._set_runway_occupied(str(row["r"]), occupied=True, aircraft=s_c)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
     def extract_and_update(self, text: str) -> list[tuple[str, str, str]]:
         """对输入文本抽取并更新图谱，返回抽取到的三元组（原始值）。"""
@@ -762,6 +908,43 @@ class Dataset_KG(Dataset):
             else:
                 snap = self.graph_snapshot()
                 lines.append(f"[SNAPSHOT] nodes={snap.get('nodes_count',0)} edges={snap.get('edges_count',0)}")
+                # 附加：列出占用中的固定设备
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    rs = sess.run(
+                        """
+                        MATCH (d:FixedDevice)
+                        OPTIONAL MATCH (a:Aircraft)-[:USING_DEVICE]->(d)
+                        WITH d, collect(a.name) AS anames
+                        RETURN d.name AS dname, coalesce(d.isOccupied,false) AS occ, anames
+                        ORDER BY dname
+                        """
+                    )
+                    busy = []
+                    for r in rs:
+                        if bool(r.get("occ", False)):
+                            an = [x for x in (r.get("anames") or []) if x]
+                            busy.append(f"设备 {r['dname']} 占用中{(' <- ' + ','.join(an)) if an else ''}")
+                    lines.extend(busy[: max_edges // 2])
+                # 附加：列出占用中的跑道
+                try:
+                    with self.driver.session(database=self.neo4j_database) as sess:
+                        rsr = sess.run(
+                            """
+                            MATCH (r:Runway)
+                            OPTIONAL MATCH (a:Aircraft)-[:USES_RUNWAY]->(r)
+                            WITH r, collect(a.name) AS anames
+                            RETURN r.name AS rname, coalesce(r.isOccupied,false) AS occ, anames
+                            ORDER BY rname
+                            """
+                        )
+                        rbusy = []
+                        for rr in rsr:
+                            if bool(rr.get("occ", False)):
+                                an = [x for x in (rr.get("anames") or []) if x]
+                                rbusy.append(f"跑道 {rr['rname']} 占用中{(' <- ' + ','.join(an)) if an else ''}")
+                        lines.extend(rbusy[: max_edges // 4])
+                except Exception:
+                    pass
         except Exception:
             pass
         ctx = "\n".join(lines[:max_edges])
@@ -857,6 +1040,13 @@ class Dataset_KG(Dataset):
                 if others:
                     conflict = True
                     reasons.append(f"跑道占用冲突：{runway} 已有飞机 {', '.join(others)} 正在使用")
+                else:
+                    # 若无其它飞机使用但跑道标记为占用（例如占用属性未及时释放），也提示
+                    with self.driver.session(database=self.neo4j_database) as sess:
+                        row = sess.run("MATCH (r:Runway {name:$n}) RETURN coalesce(r.isOccupied,false) AS occ", {"n": runway}).single()
+                    if row and bool(row.get("occ", False)):
+                        conflict = True
+                        reasons.append(f"跑道占用冲突：{runway} 已处于占用状态")
             elif p == "牵引":
                 # s 可能是设备，o 是飞机
                 aircraft = self._canon_entity(o)
@@ -865,8 +1055,115 @@ class Dataset_KG(Dataset):
                 if other_devices:
                     conflict = True
                     reasons.append(f"牵引冲突：飞机 {aircraft} 已被 {', '.join(other_devices)} 牵引")
+                # 若被使用设备当前被占用（固定设备），也提示
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    row = sess.run("MATCH (d:Device {name:$n}) RETURN coalesce(d.isOccupied,false) AS occ", {"n": device}).single()
+                    if row and bool(row.get("occ", False)):
+                        conflict = True
+                        reasons.append(f"设备占用冲突：设备 {device} 已处于占用状态")
+            # 若事件直接引用设备（如 FRx 执行作业/动作=ZYxx_FRx），检测占用
+            if re.fullmatch(r"FR\d{1,3}|MR\d{2}", self._canon_entity(s)) and p in {"执行作业", "动作"}:
+                devn = self._canon_entity(s)
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    row = sess.run("MATCH (d:Device {name:$n}) RETURN coalesce(d.isOccupied,false) AS occ", {"n": devn}).single()
+                    if row and bool(row.get("occ", False)):
+                        conflict = True
+                        reasons.append(f"设备占用冲突：设备 {devn} 已处于占用状态")
 
         return {"is_conflict": conflict, "reasons": reasons, "triples": triples}
+
+    # ----------------------------
+    # 设备占用/释放接口
+    # ----------------------------
+    def _set_device_occupied(self, device_name: str, *, occupied: bool, aircraft: str | None = None, job_code: str | None = None):
+        """内部：标记设备占用/释放，并可选维护 (Aircraft)-[:USING_DEVICE]->(Device) 与作业实例。
+
+        - device_name: FRxx/MRxx
+        - aircraft: 可选，“飞机xxx” 名称
+        - job_code: 可选，ZYxx
+        """
+        dlabel = self._class_for_entity(device_name) or self.Device
+        with self.driver.session(database=self.neo4j_database) as sess:
+            # 属性位
+            sess.run(f"MATCH (d:{dlabel} {{name:$n}}) SET d.isOccupied=$occ", {"n": device_name, "occ": bool(occupied)})  # type: ignore[arg-type]
+            # 规则：占用则取消单纯预占；释放后若仍有分配/作业实例则保持 isReserved=true
+            if occupied:
+                sess.run("MATCH (d:Device {name:$n}) SET d.isReserved=true", {"n": device_name})
+            else:
+                # 若存在作业实例分配则仍保留 isReserved=true，否则清除
+                sess.run(
+                    """
+                    MATCH (d:Device {name:$n})
+                    OPTIONAL MATCH (d)-[:ASSIGNED_TO_JOB_INSTANCE]->(:JobInstance)
+                    WITH d, count(*) AS c
+                    FOREACH (_ IN CASE WHEN c=0 THEN [1] ELSE [] END | SET d.isReserved=false)
+                    """,
+                    {"n": device_name},
+                )
+            if occupied:
+                # 绑定使用关系（若指定飞机）
+                if aircraft:
+                    alabel = self._class_for_entity(aircraft) or self.Aircraft
+                    sess.run(f"MERGE (a:{alabel} {{name:$a}})", {"a": aircraft})  # type: ignore[arg-type]
+                    sess.run(
+                        "MATCH (a {name:$a}) MATCH (d {name:$d}) MERGE (a)-[:USING_DEVICE]->(d)",
+                        {"a": aircraft, "d": device_name},
+                    )
+                # 若给出作业，则创建/绑定作业实例 ZYxx_FRyy
+                if job_code and re.fullmatch(r"ZY[A-Z0-9]+", job_code):
+                    inst = f"{job_code}_{device_name}"
+                    sess.run("MERGE (j:Job {name:$j})", {"j": job_code})
+                    sess.run("MERGE (ji:JobInstance {name:$n}) SET ji.job=$j, ji.device=$d", {"n": inst, "j": job_code, "d": device_name})
+                    sess.run("MATCH (ji:JobInstance {name:$n}) MATCH (j:Job {name:$j}) MERGE (ji)-[:JOB_INSTANCE_OF]->(j)", {"n": inst, "j": job_code})
+                    sess.run("MATCH (d:Device {name:$d}) MATCH (ji:JobInstance {name:$n}) MERGE (d)-[:ASSIGNED_TO_JOB_INSTANCE]->(ji)", {"d": device_name, "n": inst})
+                    sess.run("MATCH (d:Device {name:$d}) SET d.isReserved=true", {"d": device_name})
+                    if aircraft:
+                        sess.run("MATCH (a:Aircraft {name:$a}) MATCH (ji:JobInstance {name:$n}) MERGE (a)-[:PERFORMS_JOB_INSTANCE]->(ji)", {"a": aircraft, "n": inst})
+
+    # ----------------------------
+    # 跑道占用/释放接口（与设备类似，供冲突检测与上下文展示）
+    # ----------------------------
+    def _set_runway_occupied(self, runway_name: str, *, occupied: bool, aircraft: str | None = None):
+        """内部：标记跑道占用/释放，并维护 (Aircraft)-[:USES_RUNWAY]->(Runway)。
+
+        - runway_name: 跑道Z / 跑道29 / 跑道30 / 跑道31
+        - aircraft: 可选，占用该跑道的飞机名
+        """
+        rlabel = self._class_for_entity(runway_name) or self.Runway
+        with self.driver.session(database=self.neo4j_database) as sess:
+            sess.run(f"MATCH (r:{rlabel} {{name:$n}}) SET r.isOccupied=$occ", {"n": runway_name, "occ": bool(occupied)})  # type: ignore[arg-type]
+            if occupied and aircraft:
+                alabel = self._class_for_entity(aircraft) or self.Aircraft
+                sess.run(f"MERGE (a:{alabel} {{name:$a}})", {"a": aircraft})  # type: ignore[arg-type]
+                # 单值化：同一飞机的 USES_RUNWAY 保持唯一
+                sess.run(
+                    "MATCH (a:Aircraft {name:$a})-[rel:USES_RUNWAY]->(x:Runway) WHERE x.name <> $r DELETE rel",
+                    {"a": aircraft, "r": runway_name},
+                )
+                sess.run(
+                    "MATCH (a:Aircraft {name:$a}) MATCH (r:Runway {name:$r}) MERGE (a)-[:USES_RUNWAY]->(r)",
+                    {"a": aircraft, "r": runway_name},
+                )
+
+    def occupy_runway(self, runway_name: str, *, aircraft: str | None = None):
+        self._set_runway_occupied(runway_name, occupied=True, aircraft=aircraft)
+
+    def release_runway(self, runway_name: str):
+        rlabel = self._class_for_entity(runway_name) or self.Runway
+        with self.driver.session(database=self.neo4j_database) as sess:
+            sess.run(f"MATCH (r:{rlabel} {{name:$n}}) SET r.isOccupied=false", {"n": runway_name})  # type: ignore[arg-type]
+            sess.run("MATCH (a:Aircraft)-[rel:USES_RUNWAY]->(r:Runway {name:$r}) DELETE rel", {"r": runway_name})
+
+    def occupy_device(self, device_name: str, *, aircraft: str | None = None, job_code: str | None = None):
+        """外部：占用设备并可选绑定飞机/作业。"""
+        self._set_device_occupied(device_name, occupied=True, aircraft=aircraft, job_code=job_code)
+
+    def release_device(self, device_name: str):
+        """外部：释放设备占用，清理 USING_DEVICE 边（保留历史作业实例以便追溯）。"""
+        dlabel = self._class_for_entity(device_name) or self.Device
+        with self.driver.session(database=self.neo4j_database) as sess:
+            sess.run(f"MATCH (d:{dlabel} {{name:$n}}) SET d.isOccupied=false", {"n": device_name})  # type: ignore[arg-type]
+            sess.run("MATCH (a:Aircraft)-[r:USING_DEVICE]->(d:Device {name:$n}) DELETE r", {"n": device_name})
 
     # ----------------------------
     # 维护操作：重置图谱（可保留固定节点）
@@ -922,6 +1219,7 @@ class Dataset_KG(Dataset):
         node_label_font_size: int = 8,
         edge_label_font_size: int = 7,
         highlight_triples: list[tuple[str, str, str]] | None = None,
+        cypher_query: str | None = None,
     ):
         """从 Neo4j 查询全图并导出 PNG（增强版本）。
 
@@ -981,19 +1279,75 @@ class Dataset_KG(Dataset):
         # 从 Neo4j 拉取节点与边
         names: list[str] = []
         edges: list[tuple[str, str, str]] = []
+        # 允许通过环境变量覆盖查询
+        if cypher_query is None:
+            try:
+                cypher_query = os.environ.get("KG_EXPORT_CYPHER_QUERY") or None
+            except Exception:
+                cypher_query = None
         with self.driver.session(database=self.neo4j_database) as sess:
-            # 先加入按类型的独立节点（即便没有边也可展示）
-            for lbl in [self.Gate, self.Runway, self.Aircraft, self.Device]:
-                rs = sess.run(f"MATCH (n:{lbl}) RETURN n.name AS name")  # type: ignore[arg-type]
-                for r in rs:
-                    names.append(r["name"])  # 可能重复，稍后去重
+            if cypher_query:
+                # 执行自定义查询，尽力从返回记录中收集 Node 的 name 属性
+                try:
+                    rs = sess.run(cypher_query)  # type: ignore[arg-type]
+                    for rec in rs:
+                        for v in rec.values():
+                            # 兼容 neo4j.Node / list[Node] / path 等情况
+                            try:
+                                from neo4j.graph import Node as _Neo4jNode  # type: ignore
+                                from neo4j.graph import Path as _Neo4jPath  # type: ignore
+                            except Exception:  # pragma: no cover - 安全回退
+                                _Neo4jNode = tuple()  # type: ignore
+                                _Neo4jPath = tuple()  # type: ignore
+                            def _collect_from(obj):
+                                if obj is None:
+                                    return
+                                # 单节点
+                                if hasattr(obj, "__class__") and obj.__class__.__name__ == "Node":
+                                    nm = obj.get("name") if hasattr(obj, "get") else None
+                                    if isinstance(nm, str):
+                                        names.append(nm)
+                                    return
+                                # 列表/可迭代
+                                if isinstance(obj, (list, tuple, set)):
+                                    for it in obj:
+                                        _collect_from(it)
+                                    return
+                                # Path: 包含 nodes()
+                                if hasattr(obj, "nodes"):
+                                    try:
+                                        for nd in obj.nodes():
+                                            nm = nd.get("name") if hasattr(nd, "get") else None
+                                            if isinstance(nm, str):
+                                                names.append(nm)
+                                    except Exception:
+                                        pass
+                            _collect_from(v)
+                except Exception:
+                    # 若查询失败则回落到全图
+                    cypher_query = None
 
-            # 收集边（只展示主要业务关系）
+            if not cypher_query:
+                # 先加入按类型的独立节点（即便没有边也可展示）
+                for lbl in [self.Gate, self.Runway, self.Aircraft, self.Device]:
+                    rs = sess.run(f"MATCH (n:{lbl}) RETURN n.name AS name")  # type: ignore[arg-type]
+                    for r in rs:
+                        names.append(r["name"])  # 可能重复，稍后去重
+
+            # 收集边（只展示主要业务关系）；若有自定义节点集合，则限定在集合内
             allow_rels = list(self.REL_TO_CN.keys())
-            rs = sess.run(
-                "MATCH (s)-[r]->(o) WHERE type(r) IN $rels RETURN s.name AS s, type(r) AS rel, o.name AS o",
-                {"rels": allow_rels},
-            )
+            if names:
+                unique = list(dict.fromkeys(names))
+                rs = sess.run(
+                    "MATCH (s)-[r]->(o) WHERE type(r) IN $rels AND s.name IN $ns AND o.name IN $ns "
+                    "RETURN s.name AS s, type(r) AS rel, o.name AS o",
+                    {"rels": allow_rels, "ns": unique},
+                )
+            else:
+                rs = sess.run(
+                    "MATCH (s)-[r]->(o) WHERE type(r) IN $rels RETURN s.name AS s, type(r) AS rel, o.name AS o",
+                    {"rels": allow_rels},
+                )
             edges = [(r["s"], r["o"], str(self.REL_TO_CN.get(r["rel"], r["rel"]))) for r in rs]
 
         # 合并边上的节点并去重

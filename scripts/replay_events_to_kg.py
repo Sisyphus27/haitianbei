@@ -227,18 +227,6 @@ def main(argv: list[str]) -> int:
     )
     args = _parse_args(argv)
 
-    # 根据参数设置一次性环境变量，以便导出函数读取
-    try:
-        if args.png_figsize:
-            os.environ['KG_EXPORT_FIGSIZE'] = args.png_figsize
-        os.environ['KG_EXPORT_DPI'] = str(args.png_dpi)
-        os.environ['KG_EXPORT_LAYOUT'] = args.png_layout
-        os.environ['KG_EXPORT_HIDE_EDGE_LABELS'] = '1' if args.png_hide_edge_labels else '0'
-        os.environ['KG_EXPORT_NODE_FONT'] = str(args.png_node_font)
-        os.environ['KG_EXPORT_EDGE_FONT'] = str(args.png_edge_font)
-        os.environ['KG_EXPORT_MAX_EDGES'] = str(args.png_max_edges)
-    except Exception:
-        pass
 
     # 准备输出目录：先清空再创建，确保每次运行得到干净的 PNG 序列
     if os.path.isdir(args.output_dir):
@@ -333,7 +321,7 @@ def main(argv: list[str]) -> int:
         processed += 1
 
         if not args.snapshot_after:
-            # 导出写入前状态
+            # 导出写入前状态（临时禁用导出，仅记录快照数）
             snap_before = kg.graph_snapshot()
             _LOG.info(
                 "[%03d] BEFORE nodes=%s edges=%s",
@@ -341,12 +329,7 @@ def main(argv: list[str]) -> int:
                 snap_before.get("nodes_count"),
                 snap_before.get("edges_count"),
             )
-            png_path = os.path.join(args.output_dir, f"kg_snapshot_{processed:04d}.png")
-            export_result = kg.export_png(png_path)
-            if isinstance(export_result, dict) and export_result.get("error"):
-                _LOG.warning("导出 PNG 失败: %s", export_result.get("error"))
-            else:
-                _LOG.info("PNG 导出完成: %s", png_path)
+            _LOG.info("跳过导出（已临时禁用 PNG/Cypher 导出）")
 
         # 抽取 + 写回
         triples = kg.extract_and_update(text)
@@ -360,36 +343,7 @@ def main(argv: list[str]) -> int:
                 snap_after.get("nodes_count"),
                 snap_after.get("edges_count"),
             )
-            png_path = os.path.join(args.output_dir, f"kg_snapshot_{processed:04d}.png")
-            # 通过环境变量传参（KGServiceLocal 会读取）。直接设置临时环境变量避免接口扩散
-            if args.png_figsize:
-                os.environ['KG_EXPORT_FIGSIZE'] = args.png_figsize
-            os.environ['KG_EXPORT_DPI'] = str(args.png_dpi)
-            os.environ['KG_EXPORT_LAYOUT'] = args.png_layout
-            os.environ['KG_EXPORT_HIDE_EDGE_LABELS'] = '1' if args.png_hide_edge_labels else '0'
-            os.environ['KG_EXPORT_NODE_FONT'] = str(args.png_node_font)
-            os.environ['KG_EXPORT_EDGE_FONT'] = str(args.png_edge_font)
-            export_result = kg.export_png(png_path)
-            # 高亮新增边：需要再次调用底层（传 highlight_triples）。尝试直接调用底层 Dataset_KG 接口以便传递新参数
-            try:
-                if hasattr(kg.kg, 'export_png'):
-                    kw = dict(
-                        figsize=args.png_figsize,
-                        dpi=args.png_dpi,
-                        layout=args.png_layout,
-                        hide_edge_labels=args.png_hide_edge_labels,
-                        node_label_font_size=args.png_node_font,
-                        edge_label_font_size=args.png_edge_font,
-                        highlight_triples=triples,
-                        max_edges=args.png_max_edges,
-                    )
-                    export_result = kg.kg.export_png(png_path, **kw)
-            except Exception as e:  # noqa: BLE001
-                _LOG.warning("高亮边导出失败(忽略): %s", e)
-            if isinstance(export_result, dict) and export_result.get("error"):
-                _LOG.warning("导出 PNG 失败: %s", export_result.get("error"))
-            else:
-                _LOG.info("PNG 导出完成(高亮新增边): %s", png_path)
+            _LOG.info("跳过导出（已临时禁用 PNG/Cypher 导出）")
 
         if args.limit is not None and processed >= args.limit:
             break

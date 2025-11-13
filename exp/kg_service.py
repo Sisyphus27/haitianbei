@@ -90,7 +90,7 @@ class KGServiceLocal:
             return {}
 
     def export_png(self, out_png: str) -> dict | None:
-        """导出 PNG，并支持通过环境变量控制绘制参数。
+        """导出 PNG，或在导出模式为 cypher 时导出 Cypher 查询文件；同时支持通过环境变量控制绘制参数。
 
         环境变量（可选）：
         - KG_EXPORT_FIGSIZE: 例如 "16,10" 或 "16x10"
@@ -129,11 +129,7 @@ class KGServiceLocal:
         if max_edges and max_edges.isdigit():
             kw["max_edges"] = int(max_edges)
 
-        try:
-            return self.kg.export_png(out_png, **kw)
-        except TypeError:
-            # 兼容旧签名
-            return self.kg.export_png(out_png)
+        return self.kg.export_png(out_png, **kw)
 
     def graph_snapshot(self) -> Dict[str, Any]:
         try:
@@ -151,5 +147,42 @@ class KGServiceLocal:
         if hasattr(self.kg, "reset_graph"):
             try:  # pragma: no cover - 仅防御性容错
                 self.kg.reset_graph(keep_fixed=keep_fixed)
+            except Exception:
+                pass
+
+    # ========== 设备占用/释放（可选） ==========
+    def occupy_device(self, device_name: str, *, aircraft: str | None = None, job_code: str | None = None) -> None:
+        """标记设备占用，并可选绑定飞机与作业。
+
+        - device_name: FRxx/MRxx
+        - aircraft: 可选，如 "飞机A001"
+        - job_code: 可选，如 "ZY10"
+        """
+        if hasattr(self.kg, "occupy_device"):
+            try:
+                self.kg.occupy_device(device_name, aircraft=aircraft, job_code=job_code)
+            except Exception:
+                pass
+
+    def release_device(self, device_name: str) -> None:
+        """释放设备占用。"""
+        if hasattr(self.kg, "release_device"):
+            try:
+                self.kg.release_device(device_name)
+            except Exception:
+                pass
+
+    # ========== 跑道占用/释放（可选） ==========
+    def occupy_runway(self, runway_name: str, *, aircraft: str | None = None) -> None:
+        if hasattr(self.kg, "occupy_runway"):
+            try:
+                self.kg.occupy_runway(runway_name, aircraft=aircraft)
+            except Exception:
+                pass
+
+    def release_runway(self, runway_name: str) -> None:
+        if hasattr(self.kg, "release_runway"):
+            try:
+                self.kg.release_runway(runway_name)
             except Exception:
                 pass
