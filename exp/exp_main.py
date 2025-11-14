@@ -2117,7 +2117,7 @@ class Exp_main(Exp_Basic):
         temperature: float = 0.0,
         timeout_sec: Optional[float] = None,
     ) -> List[str]:
-        """使用已缓存的模型句柄执行批量生成。"""
+        """使用已缓存的模型句柄执行生成（支持单样本和批量，单样本时优化性能）。"""
         if not isinstance(prompts, list):
             raise TypeError("prompts 必须为 list[str]")
         if not prompts:
@@ -2173,7 +2173,67 @@ class Exp_main(Exp_Basic):
         if do_sample:
             gen_kwargs["temperature"] = float(temperature)
 
-        stopping_builder = None
+        # 单样本处理（优化：不需要 padding）
+        if len(prompts) == 1:
+            text = str(prompts[0]) if isinstance(prompts[0], str) else str(prompts[0])
+            inputs = tok(text, return_tensors="pt", truncation=True, max_length=4096)
+            inputs = {k: v.to(device_obj) for k, v in inputs.items()}
+
+            start_ts = _time.monotonic()
+            stopping_criteria = None
+            if timeout > 0:
+                try:
+                    from transformers import StoppingCriteria, StoppingCriteriaList  # type: ignore
+
+                    class _TimeoutStopping(StoppingCriteria):
+                        def __init__(self, limit: float) -> None:
+                            self._limit = float(limit)
+                            self._start = _time.monotonic()
+
+                        def __call__(self, input_ids, scores, **kwargs):  # type: ignore[override]
+                            return (_time.monotonic() - self._start) >= self._limit
+
+                    stopping_criteria = StoppingCriteriaList([_TimeoutStopping(timeout)])
+                except Exception:
+                    gen_kwargs["max_time"] = timeout
+
+            with torch.no_grad():
+                try:
+                    if stopping_criteria is not None:
+                        generated = model.generate(
+                            **inputs, **gen_kwargs, stopping_criteria=stopping_criteria
+                        )
+                    else:
+                        generated = model.generate(**inputs, **gen_kwargs)
+                except Exception as err:  # noqa: BLE001
+                    _logging.error(f"[GEN] {model_key} 生成失败: {err}")
+                    raise
+
+            duration = _time.monotonic() - start_ts
+            if timeout > 0 and duration > timeout + 1:
+                _logging.warning(
+                    f"[GEN] {model_key} 生成耗时 {duration:.1f}s，超过阈值 {timeout:.1f}s"
+                )
+
+            # 单样本 decode（直接提取新生成部分）
+            prompt_len = inputs["input_ids"].shape[1]
+            gen_tokens = generated[0][prompt_len:].detach().cpu()
+            decoded = tok.decode(gen_tokens, skip_special_tokens=True)
+            return [decoded]
+
+        # 批量处理（当 prompts > 1 时，使用批量处理）
+        texts = [str(p) if isinstance(p, str) else str(p) for p in prompts]
+        inputs = tok(
+            texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=4096,
+        )
+        inputs = {k: v.to(device_obj) for k, v in inputs.items()}
+
+        start_ts = _time.monotonic()
+        stopping_criteria = None
         if timeout > 0:
             try:
                 from transformers import StoppingCriteria, StoppingCriteriaList  # type: ignore
@@ -2186,47 +2246,49 @@ class Exp_main(Exp_Basic):
                     def __call__(self, input_ids, scores, **kwargs):  # type: ignore[override]
                         return (_time.monotonic() - self._start) >= self._limit
 
-                def _build_timeout_list() -> "StoppingCriteriaList":
-                    return StoppingCriteriaList([_TimeoutStopping(timeout)])
-
-                stopping_builder = _build_timeout_list
+                stopping_criteria = StoppingCriteriaList([_TimeoutStopping(timeout)])
             except Exception:
                 gen_kwargs["max_time"] = timeout
 
-        outputs: List[str] = []
-
         with torch.no_grad():
-            for prompt in prompts:
-                text = prompt if isinstance(prompt, str) else str(prompt)
-                inputs = tok(text, return_tensors="pt")
-                try:
-                    inputs = inputs.to(device_obj)
-                except Exception:
-                    inputs = {k: v.to(device_obj) for k, v in inputs.items()}
-
-                start_ts = _time.monotonic()
-                local_stopping = stopping_builder() if stopping_builder else None
-                try:
-                    if local_stopping is not None:
-                        generated = model.generate(
-                            **inputs, **gen_kwargs, stopping_criteria=local_stopping
-                        )
-                    else:
-                        generated = model.generate(**inputs, **gen_kwargs)
-                except Exception as err:  # noqa: BLE001
-                    _logging.error(f"[GEN] {model_key} 生成失败: {err}")
-                    raise
-                duration = _time.monotonic() - start_ts
-                if timeout > 0 and duration > timeout + 1:
-                    _logging.warning(
-                        f"[GEN] {model_key} 生成耗时 {duration:.1f}s，超过阈值 {timeout:.1f}s，输出可能被截断"
+            try:
+                if stopping_criteria is not None:
+                    generated = model.generate(
+                        **inputs, **gen_kwargs, stopping_criteria=stopping_criteria
                     )
+                else:
+                    generated = model.generate(**inputs, **gen_kwargs)
+            except Exception as err:  # noqa: BLE001
+                _logging.error(f"[GEN] {model_key} 批量生成失败: {err}")
+                raise
 
-                prompt_len = inputs["input_ids"].shape[1]
-                seq = generated[0].detach().cpu()
-                outputs.append(
-                    tok.decode(seq[prompt_len:], skip_special_tokens=True)
-                )
+        duration = _time.monotonic() - start_ts
+        if timeout > 0 and duration > timeout + 1:
+            _logging.warning(
+                f"[GEN] {model_key} 批量生成耗时 {duration:.1f}s，超过阈值 {timeout:.1f}s"
+            )
+
+        # 批量 decode（去除 prompt 部分）
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs.get("attention_mask", None)
+        outputs: List[str] = []
+        for i in range(len(generated)):
+            if attention_mask is not None:
+                prompt_len = attention_mask[i].sum().item()
+            else:
+                prompt_len = (input_ids[i] != tok.pad_token_id).sum().item()
+            
+            gen_seq = generated[i]
+            if gen_seq.shape[0] > prompt_len:
+                gen_tokens = gen_seq[prompt_len:].detach().cpu()
+                decoded = tok.decode(gen_tokens, skip_special_tokens=True)
+            else:
+                decoded = ""
+            outputs.append(decoded)
+
+        _logging.debug(
+            f"[GEN] {model_key} 批量处理 {len(prompts)} 个样本，平均 {duration/len(prompts):.2f}s/样本"
+        )
 
         return outputs
 
@@ -2470,6 +2532,239 @@ class Exp_main(Exp_Basic):
             except Exception:
                 pass
 
+    def _extract_focus_entities(self, event_text: str) -> Optional[List[str]]:
+        """从事件文本中提取焦点实体（用于 KG 查询）。"""
+        auto_focus: List[str] = []
+        try:
+            trips = _extract_triples(event_text)
+            for s, p, o in trips:
+                for t in (s, o):
+                    t = str(t).strip()
+                    if t:
+                        auto_focus.append(t)
+        except Exception:
+            pass
+        # 去重
+        if auto_focus:
+            seen = set()
+            cur_focus = []
+            for x in auto_focus:
+                if x and x not in seen:
+                    cur_focus.append(x)
+                    seen.add(x)
+            return cur_focus
+        return None
+
+    def _get_kg_context(self, focus_entities: Optional[List[str]] = None) -> str:
+        """获取 KG 上下文文本。"""
+        if self.kg_service is not None:
+            try:
+                return self.kg_service.get_context_text(focus_entities=focus_entities, limit=200)
+            except Exception:
+                return "【KG状态】\n(离线模式，服务异常)"
+        return "【KG状态】\n(离线模式，未加载图谱)"
+
+    def _process_single_event(
+        self,
+        event: str,
+        prompt: str,
+        rules_text: str,
+        kg_text: str,
+        simple_output: bool,
+        decomp_available: bool,
+        conflict_judge: bool = True,
+    ) -> str:
+        """处理单个事件：推理、解析、保存、更新KG（单样本优化版本）。"""
+        # 单样本推理
+        out: Optional[str] = None
+        try:
+            outs = self._generate_with_handle(
+                "judge",
+                [prompt],
+                max_tokens=1024,
+                temperature=0.0,
+                timeout_sec=self.generate_timeout_sec,
+            )
+            out = (outs[0] if outs else "") or ""
+        except (RuntimeError, OSError, MemoryError) as err:
+            try:
+                _logging.warning(f"[JUDGE] 主模型推理失败，尝试降级：{err}")
+            except Exception:
+                pass
+            out = None
+
+        # 重试逻辑
+        if out is None or not out.strip():
+            try:
+                if self.no_simple_fallback:
+                    # 重试：使用原完整提示
+                    outs = self._generate_with_handle(
+                        "judge",
+                        [prompt],
+                        max_tokens=int(self.retry_max_new_tokens),
+                        temperature=0.0,
+                        timeout_sec=self.generate_timeout_sec,
+                    )
+                    out = (outs[0] if outs else "") or ""
+                else:
+                    # 降级：使用 simple 提示
+                    simple_prompt = self._format_conflict_prompt_with_mode(
+                        event,
+                        rules_text,
+                        kg_text,
+                        simple=True,
+                        conflict_judge=conflict_judge,
+                    )
+                    fallback_key = "decomp" if decomp_available else "judge"
+                    outs = self._generate_with_handle(
+                        fallback_key,
+                        [simple_prompt],
+                        max_tokens=int(self.retry_max_new_tokens),
+                        temperature=0.0,
+                        timeout_sec=self.generate_timeout_sec,
+                    )
+                    out = (outs[0] if outs else "") or ""
+            except Exception:
+                out = ""
+
+        # 解析输出
+        parsed = self._parse_judge_output(out) if out else {"parsed": False, "compliance": None, "reasons_len": 0}
+        
+        # 如果解析失败，再次重试
+        if not simple_output and not bool(parsed.get("parsed")):
+            try:
+                if self.no_simple_fallback:
+                    # 重试：使用原完整提示
+                    outs = self._generate_with_handle(
+                        "judge",
+                        [prompt],
+                        max_tokens=int(self.retry_max_new_tokens),
+                        temperature=0.0,
+                        timeout_sec=self.generate_timeout_sec,
+                    )
+                    if outs and outs[0]:
+                        out = outs[0]
+                        parsed = self._parse_judge_output(out)
+                else:
+                    # 降级：使用 simple 提示
+                    simple_prompt = self._format_conflict_prompt_with_mode(
+                        event,
+                        rules_text,
+                        kg_text,
+                        simple=True,
+                        conflict_judge=conflict_judge,
+                    )
+                    fallback_key = "decomp" if decomp_available else "judge"
+                    outs = self._generate_with_handle(
+                        fallback_key,
+                        [simple_prompt],
+                        max_tokens=int(self.retry_max_new_tokens),
+                        temperature=0.0,
+                        timeout_sec=self.generate_timeout_sec,
+                    )
+                    if outs and outs[0]:
+                        out = outs[0]
+                        parsed = self._parse_judge_output(out)
+            except Exception:
+                pass
+
+        # simple_output 处理
+        if simple_output and out:
+            if "合规" in out:
+                out = "合规"
+            elif "冲突" in out:
+                out = "冲突"
+            else:
+                out = out.strip().splitlines()[0] if out.strip() else ""
+
+        # 保存输出
+        try:
+            import json as __json
+            import time as __t
+
+            payload = {
+                "ts": __t.strftime("%Y-%m-%d %H:%M%S", __t.localtime()),
+                "event": event,
+                "model": "judge",
+                "compliance": parsed.get("compliance"),
+                "reasons_len": parsed.get("reasons_len"),
+            }
+            if not bool(parsed.get("parsed")):
+                # 解析失败，使用 KG 结果构造最小 JSON
+                _kg_chk = None
+                if self.kg_service is not None:
+                    try:
+                        _kg_chk = self.kg_service.check_event_conflicts(event) or {}
+                    except Exception:
+                        _kg_chk = None
+                _fallback = self._build_minimal_judge_json(event, _kg_chk)
+                payload["output"] = _fallback
+                payload["compliance"] = _fallback.get("判定")
+                payload["reasons_len"] = len(_fallback.get("依据", []) or [])
+            else:
+                try:
+                    payload["output"] = __json.loads(out) if isinstance(out, str) else out
+                except Exception:
+                    payload["output_raw"] = out
+            self._append_jsonl(self._judge_out_file, payload)
+        except Exception:
+            pass
+
+        # 更新 KG
+        if self.kg_service is not None:
+            kg_reasons_cnt = 0
+            try:
+                _kg_chk = self.kg_service.check_event_conflicts(event) or {}
+                _kg_rs = _kg_chk.get("reasons", []) or []
+                kg_reasons_cnt = len(_kg_rs)
+            except Exception:
+                kg_reasons_cnt = 0
+
+            trigger_policy = getattr(self.args, "marl_trigger_policy", "llm_and_kg")
+            llm_conflict = bool(parsed.get("compliance") == "冲突")
+            kg_conflict = bool(kg_reasons_cnt > 0)
+            if trigger_policy == "llm_and_kg":
+                is_conflict = llm_conflict and kg_conflict
+            elif trigger_policy == "llm_or_kg":
+                is_conflict = llm_conflict or kg_conflict
+            elif trigger_policy == "llm_only":
+                is_conflict = llm_conflict
+            elif trigger_policy == "kg_only":
+                is_conflict = kg_conflict
+            else:
+                is_conflict = llm_conflict and kg_conflict
+
+            if is_conflict:
+                try:
+                    if getattr(self.kg_service, "kg", None) is not None:
+                        self._marl_rectify_and_update_kg(
+                            self.kg_service.kg, result_name_suffix="auto"
+                        )
+                except Exception:
+                    try:
+                        self.kg_service.extract_and_update(event)
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self.kg_service.extract_and_update(event)
+                except Exception:
+                    pass
+
+            # KG 可视化
+            try:
+                import time as __t
+                self.kg_vis_idx += 1
+                ts = int(__t.time())
+                out_png = os.path.join(
+                    self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
+                )
+                self.kg_service.export_png(out_png)
+            except Exception:
+                pass
+
+        return out or ""
+
     def stream_judge_conflicts(
         self,
         events_iter,
@@ -2482,7 +2777,8 @@ class Exp_main(Exp_Basic):
         """对事件流进行逐条/小批量判冲突（流式在推理时执行，而非训练时）。
 
         - events_iter: 可迭代的事件文本序列（例如生成器/列表）。
-        - 每批最多 batch_size 条，生成对应输出后立即 yield，适合持续到来的实时日志。
+        - batch_size=1 时使用单样本处理（每条事件立即处理，无需累积batch）。
+        - batch_size>1 时使用批量处理（累积batch后批量处理）。
         - 返回迭代器：每次 yield (event_text, output_str)
         """
         if not getattr(self, "_models_ready", False):
@@ -2503,42 +2799,86 @@ class Exp_main(Exp_Basic):
         _kg_vis_dir = self.kg_vis_dir
         _kg_vis_idx = self.kg_vis_idx
 
+        # 单样本处理模式（batch_size=1）：每条事件立即处理，不需要累积batch
+        is_single_sample = max(1, int(batch_size)) == 1
+
+        if is_single_sample:
+            # 单样本模式：每条事件立即处理
+            for ev in events_iter:
+                if not (isinstance(ev, str) and ev.strip()):
+                    continue
+                ev = ev.strip()
+                
+                # 针对每条事件，使用"当前"KG状态生成 prompt（先判后更）
+                cur_focus = self._extract_focus_entities(ev)
+                kg_text = self._get_kg_context(cur_focus)
+                
+                # 可选：先调用小LLM做问题分解
+                if use_decomposer and decomp_available:
+                    try:
+                        d_prompt = self._format_decompose_prompt(ev, rules_text, kg_text)
+                        d_outs = self._generate_with_handle(
+                            "decomp",
+                            [d_prompt],
+                            max_tokens=1024,
+                            temperature=0.0,
+                            timeout_sec=self.generate_timeout_sec,
+                        )
+                        decomp_text = (d_outs[0] if d_outs else "") or ""
+                        # 保存小模型输出到 JSONL
+                        try:
+                            import json as __json
+                            import time as __t
+
+                            payload = {
+                                "ts": __t.strftime("%Y-%m-%d %H:%M%S", __t.localtime()),
+                                "event": ev,
+                                "model": "decomposer",
+                            }
+                            try:
+                                payload["output"] = __json.loads(decomp_text)
+                            except Exception:
+                                payload["output_raw"] = decomp_text
+                            self._append_jsonl(self._decomp_out_file, payload)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                
+                if show_decomposition:
+                    try:
+                        _logging.info("[SAVE] 分解器输出已保存到 JSONL（不在控制台展示）")
+                    except Exception:
+                        pass
+
+                # 主提示：构建冲突判定提示
+                prompt = self._format_conflict_prompt_with_mode(
+                    ev,
+                    rules_text,
+                    kg_text,
+                    simple=simple_output,
+                    conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                )
+                
+                # 单样本处理：推理、解析、保存、更新KG
+                out = self._process_single_event(
+                    ev, prompt, rules_text, kg_text, simple_output,
+                    decomp_available, conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                )
+                
+                yield (ev, out)
+            return
+
+        # 批量处理模式（batch_size > 1）：累积batch后批量处理
         batch_events: List[str] = []
         batch_prompts: List[str] = []
         for ev in events_iter:
             if not (isinstance(ev, str) and ev.strip()):
                 continue
             ev = ev.strip()
-            # 针对每条事件，使用“当前”KG状态生成 prompt（先判后更）
-            # 仅关注“当前事件文本”中出现的实体：从抽取的三元组(subject/object)收集实体作为查询焦点。
-            # 注意：不再合并全局 --focus_entities，严格限定上下文查询范围到本事件。
-            auto_focus: List[str] = []
-            try:
-                trips = _extract_triples(ev)
-                for s, p, o in trips:
-                    for t in (s, o):
-                        t = str(t).strip()
-                        if t:
-                            auto_focus.append(t)
-            except Exception:
-                pass
-            # 去重：仅使用当前文本实体
-            if auto_focus:
-                seen = set()
-                cur_focus = []
-                for x in auto_focus:
-                    if x and x not in seen:
-                        cur_focus.append(x)
-                        seen.add(x)
-            else:
-                cur_focus = None
-            if self.kg_service is not None:
-                try:
-                    kg_text = self.kg_service.get_context_text(focus_entities=cur_focus, limit=200)
-                except Exception:
-                    kg_text = "【KG状态】\n(离线模式，服务异常)"
-            else:
-                kg_text = "【KG状态】\n(离线模式，未加载图谱)"
+            # 针对每条事件，使用"当前"KG状态生成 prompt（先判后更）
+            cur_focus = self._extract_focus_entities(ev)
+            kg_text = self._get_kg_context(cur_focus)
             # 可选：先调用小LLM做问题分解
             decomp_text = None
             if use_decomposer and decomp_available:
@@ -2629,37 +2969,8 @@ class Exp_main(Exp_Basic):
                             # simple 降级（保持原逻辑，但 max_tokens 改为可配置上限）
                             retry_prompts: List[str] = []
                             for ev_i in batch_events:
-                                try:
-                                    _auto = []
-                                    try:
-                                        _tr = _extract_triples(ev_i)
-                                        for s, p, o in _tr:
-                                            for t in (s, o):
-                                                t = str(t).strip()
-                                                if t:
-                                                    _auto.append(t)
-                                    except Exception:
-                                        pass
-                                    if _auto:
-                                        _seen = set()
-                                        _focus = []
-                                        for x in _auto:
-                                            if x and x not in _seen:
-                                                _focus.append(x)
-                                                _seen.add(x)
-                                    else:
-                                        _focus = None
-                                    if self.kg_service is not None:
-                                        try:
-                                            _kg_txt = self.kg_service.get_context_text(
-                                                focus_entities=_focus, limit=200
-                                            )
-                                        except Exception:
-                                            _kg_txt = "【KG状态】\n(离线模式，服务异常)"
-                                    else:
-                                        _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
-                                except Exception:
-                                    _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                _focus = self._extract_focus_entities(ev_i)
+                                _kg_txt = self._get_kg_context(_focus)
                                 retry_prompts.append(
                                     self._format_conflict_prompt_with_mode(
                                         ev_i,
@@ -2707,35 +3018,8 @@ class Exp_main(Exp_Basic):
                                 for i in retry_idx:
                                     ev_i = batch_events[i]
                                     # 复用当前KG快速构造 simple 提示
-                                    try:
-                                        _auto: List[str] = []
-                                        try:
-                                            _tr = _extract_triples(ev_i)
-                                            for s, p, o in _tr:
-                                                for t in (s, o):
-                                                    t = str(t).strip()
-                                                    if t:
-                                                        _auto.append(t)
-                                        except Exception:
-                                            pass
-                                        if _auto:
-                                            _seen = set()
-                                            _focus = []
-                                            for x in _auto:
-                                                if x and x not in _seen:
-                                                    _focus.append(x)
-                                                    _seen.add(x)
-                                        else:
-                                            _focus = None
-                                        if self.kg_service is not None:
-                                            try:
-                                                _kg_txt = self.kg_service.get_context_text(focus_entities=_focus, limit=200)
-                                            except Exception:
-                                                _kg_txt = "【KG状态】\n(离线模式，服务异常)"
-                                        else:
-                                            _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
-                                    except Exception:
-                                        _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                    _focus = self._extract_focus_entities(ev_i)
+                                    _kg_txt = self._get_kg_context(_focus)
                                     retry_prompts.append(
                                         self._format_conflict_prompt_with_mode(
                                             ev_i,
@@ -2916,37 +3200,8 @@ class Exp_main(Exp_Basic):
                     else:
                         retry_prompts: List[str] = []
                         for ev_i in batch_events:
-                            try:
-                                _auto = []
-                                try:
-                                    _tr = _extract_triples(ev_i)
-                                    for s, p, o in _tr:
-                                        for t in (s, o):
-                                            t = str(t).strip()
-                                            if t:
-                                                _auto.append(t)
-                                except Exception:
-                                    pass
-                                if _auto:
-                                    _seen = set()
-                                    _focus = []
-                                    for x in _auto:
-                                        if x and x not in _seen:
-                                            _focus.append(x)
-                                            _seen.add(x)
-                                else:
-                                    _focus = None
-                                if self.kg_service is not None:
-                                    try:
-                                        _kg_txt = self.kg_service.get_context_text(
-                                            focus_entities=_focus, limit=200
-                                        )
-                                    except Exception:
-                                        _kg_txt = "【KG状态】\n(离线模式，服务异常)"
-                                else:
-                                    _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
-                            except Exception:
-                                _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                            _focus = self._extract_focus_entities(ev_i)
+                            _kg_txt = self._get_kg_context(_focus)
                             retry_prompts.append(
                                 self._format_conflict_prompt_with_mode(
                                     ev_i,
@@ -2992,37 +3247,8 @@ class Exp_main(Exp_Basic):
                             retry_prompts: List[str] = []
                             for i in retry_idx:
                                 ev_i = batch_events[i]
-                                try:
-                                    _auto: List[str] = []
-                                    try:
-                                        _tr = _extract_triples(ev_i)
-                                        for s, p, o in _tr:
-                                            for t in (s, o):
-                                                t = str(t).strip()
-                                                if t:
-                                                    _auto.append(t)
-                                    except Exception:
-                                        pass
-                                    if _auto:
-                                        _seen = set()
-                                        _focus = []
-                                        for x in _auto:
-                                            if x and x not in _seen:
-                                                _focus.append(x)
-                                                _seen.add(x)
-                                    else:
-                                        _focus = None
-                                    if self.kg_service is not None:
-                                        try:
-                                            _kg_txt = self.kg_service.get_context_text(
-                                                focus_entities=_focus, limit=200
-                                            )
-                                        except Exception:
-                                            _kg_txt = "【KG状态】\n(离线模式，服务异常)"
-                                    else:
-                                        _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
-                                except Exception:
-                                    _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                _focus = self._extract_focus_entities(ev_i)
+                                _kg_txt = self._get_kg_context(_focus)
                                 retry_prompts.append(
                                     self._format_conflict_prompt_with_mode(
                                         ev_i,
