@@ -209,6 +209,8 @@ class Exp_main(Exp_Basic):
         # KG 可视化输出目录与计数器
         self.kg_vis_dir = os.path.join(self.root, "results", "kg_vis")
         self.kg_vis_idx = 0
+        # 是否启用KG可视化（默认禁用以提高性能）
+        self.enable_kg_vis = not bool(getattr(self.args, "disable_kg_vis", True))
         # 输出保存目录（区分大小模型）
         self.results_out_dir = os.path.join(self.root, "results", "model_outputs")
         self.judge_out_dir = os.path.join(self.results_out_dir, "judge")
@@ -2581,12 +2583,14 @@ class Exp_main(Exp_Basic):
         - conflict_judge=False: 仅抽取时空信息模式，不需要解析标签，不需要重试逻辑
         """
         # 单样本推理
+        # 优化：根据模式调整max_tokens，仅抽取时空信息时使用较小的值
+        max_gen_tokens = 512 if not conflict_judge else 1024
         out: Optional[str] = None
         try:
             outs = self._generate_with_handle(
                 "judge",
                 [prompt],
-                max_tokens=1024,
+                max_tokens=max_gen_tokens,
                 temperature=0.0,
                 timeout_sec=self.generate_timeout_sec,
             )
@@ -2603,11 +2607,13 @@ class Exp_main(Exp_Basic):
             # 不需要重试逻辑，不需要解析标签，直接保存输出
             if out is None or not out.strip():
                 # 如果生成失败，尝试重试一次（仅限生成失败，不涉及解析）
+                # 优化：仅抽取模式使用较小的重试token数
+                retry_tokens = min(max_gen_tokens * 2, 512)
                 try:
                     outs = self._generate_with_handle(
                         "judge",
                         [prompt],
-                        max_tokens=int(self.retry_max_new_tokens),
+                        max_tokens=retry_tokens,
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
                     )
@@ -2641,17 +2647,18 @@ class Exp_main(Exp_Basic):
                 except Exception:
                     pass
 
-                # KG 可视化
-                try:
-                    import time as __t
-                    self.kg_vis_idx += 1
-                    ts = int(__t.time())
-                    out_png = os.path.join(
-                        self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
-                    )
-                    self.kg_service.export_png(out_png)
-                except Exception:
-                    pass
+                # KG 可视化（仅在启用时执行，避免性能损失）
+                if self.enable_kg_vis:
+                    try:
+                        import time as __t
+                        self.kg_vis_idx += 1
+                        ts = int(__t.time())
+                        out_png = os.path.join(
+                            self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
+                        )
+                        self.kg_service.export_png(out_png)
+                    except Exception:
+                        pass
 
             return out or ""
 
@@ -2814,17 +2821,18 @@ class Exp_main(Exp_Basic):
                 except Exception:
                     pass
 
-            # KG 可视化
-            try:
-                import time as __t
-                self.kg_vis_idx += 1
-                ts = int(__t.time())
-                out_png = os.path.join(
-                    self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
-                )
-                self.kg_service.export_png(out_png)
-            except Exception:
-                pass
+            # KG 可视化（仅在启用时执行，避免性能损失）
+            if self.enable_kg_vis:
+                try:
+                    import time as __t
+                    self.kg_vis_idx += 1
+                    ts = int(__t.time())
+                    out_png = os.path.join(
+                        self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
+                    )
+                    self.kg_service.export_png(out_png)
+                except Exception:
+                    pass
 
         return out or ""
 
@@ -2995,12 +3003,14 @@ class Exp_main(Exp_Basic):
             batch_prompts.append(prompt)
 
             if len(batch_events) >= max(1, int(batch_size)):
+                # 优化：根据模式调整max_tokens
+                batch_max_tokens = 512 if not conflict_judge_mode else 1024
                 outs: Optional[List[str]] = None
                 try:
                     outs = self._generate_with_handle(
                         "judge",
                         batch_prompts,
-                        max_tokens=1024,
+                        max_tokens=batch_max_tokens,
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
                     )
@@ -3014,12 +3024,14 @@ class Exp_main(Exp_Basic):
                 # === conflict_judge=False：仅抽取时空信息模式，不需要重试逻辑 ===
                 if not conflict_judge_mode:
                     # 如果生成失败，尝试重试一次（仅限生成失败，不涉及解析）
+                    # 优化：仅抽取模式使用较小的重试token数
                     if outs is None:
                         try:
+                            retry_tokens = min(batch_max_tokens * 2, 512)
                             outs = self._generate_with_handle(
                                 "judge",
                                 batch_prompts,
-                                max_tokens=int(self.retry_max_new_tokens),
+                                max_tokens=retry_tokens,
                                 temperature=0.0,
                                 timeout_sec=self.generate_timeout_sec,
                             )
@@ -3052,17 +3064,18 @@ class Exp_main(Exp_Basic):
                             except Exception:
                                 pass
 
-                            # KG 可视化
-                            try:
-                                import time as __t
-                                self.kg_vis_idx += 1
-                                ts = int(__t.time())
-                                out_png = os.path.join(
-                                    self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
-                                )
-                                self.kg_service.export_png(out_png)
-                            except Exception:
-                                pass
+                            # KG 可视化（仅在启用时执行，避免性能损失）
+                            if self.enable_kg_vis:
+                                try:
+                                    import time as __t
+                                    self.kg_vis_idx += 1
+                                    ts = int(__t.time())
+                                    out_png = os.path.join(
+                                        self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
+                                    )
+                                    self.kg_service.export_png(out_png)
+                                except Exception:
+                                    pass
 
                         yield (e, o)
                     batch_events, batch_prompts = [], []
@@ -3269,29 +3282,31 @@ class Exp_main(Exp_Basic):
                                 self.kg_service.extract_and_update(e)
                             except Exception:
                                 pass
-                        # 每次更新后都导出一张 KG 可视化图片
-                        try:
-                            import time as __t
-
-                            _kg_vis_idx += 1
-                            ts = int(__t.time())
-                            out_png = _os.path.join(
-                                _kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png"
-                            )
-                            self.kg_service.export_png(out_png)
-                        except Exception:
-                            pass
+                        # KG 可视化（仅在启用时执行，避免性能损失）
+                        if self.enable_kg_vis:
+                            try:
+                                import time as __t
+                                _kg_vis_idx += 1
+                                ts = int(__t.time())
+                                out_png = _os.path.join(
+                                    _kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png"
+                                )
+                                self.kg_service.export_png(out_png)
+                            except Exception:
+                                pass
                     yield (e, o)
                 batch_events, batch_prompts = [], []
 
         # 处理尾批
         if batch_events:
+            # 优化：根据模式调整max_tokens
+            tail_max_tokens = 512 if not conflict_judge_mode else 1024
             outs: Optional[List[str]] = None
             try:
                 outs = self._generate_with_handle(
                     "judge",
                     batch_prompts,
-                    max_tokens=1024,
+                    max_tokens=tail_max_tokens,
                     temperature=0.0,
                     timeout_sec=self.generate_timeout_sec,
                 )
@@ -3305,12 +3320,14 @@ class Exp_main(Exp_Basic):
             # === conflict_judge=False：仅抽取时空信息模式，不需要重试逻辑 ===
             if not conflict_judge_mode:
                 # 如果生成失败，尝试重试一次（仅限生成失败，不涉及解析）
+                # 优化：仅抽取模式使用较小的重试token数
                 if outs is None:
                     try:
+                        retry_tokens = min(tail_max_tokens * 2, 512)
                         outs = self._generate_with_handle(
                             "judge",
                             batch_prompts,
-                            max_tokens=int(self.retry_max_new_tokens),
+                            max_tokens=retry_tokens,
                             temperature=0.0,
                             timeout_sec=self.generate_timeout_sec,
                         )
@@ -3343,17 +3360,18 @@ class Exp_main(Exp_Basic):
                         except Exception:
                             pass
 
-                        # KG 可视化
-                        try:
-                            import time as __t
-                            self.kg_vis_idx += 1
-                            ts = int(__t.time())
-                            out_png = os.path.join(
-                                self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
-                            )
-                            self.kg_service.export_png(out_png)
-                        except Exception:
-                            pass
+                        # KG 可视化（仅在启用时执行，避免性能损失）
+                        if self.enable_kg_vis:
+                            try:
+                                import time as __t
+                                self.kg_vis_idx += 1
+                                ts = int(__t.time())
+                                out_png = os.path.join(
+                                    self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
+                                )
+                                self.kg_service.export_png(out_png)
+                            except Exception:
+                                pass
 
                     yield (e, o)
                 return
@@ -3552,21 +3570,19 @@ class Exp_main(Exp_Basic):
                                 self.kg_service.extract_and_update(e)
                             except Exception:
                                 pass
-                        # 可视化
-                        try:
-                            import time as __t
-
-                            _kg_vis_idx += 1
-                            ts = int(__t.time())
-                            out_png = os.path.join(
-                                _kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png"
-                            )
-                            self.kg_service.export_png(out_png)
-                        except Exception:
-                            pass
+                        # KG 可视化（仅在启用时执行，避免性能损失）
+                        if self.enable_kg_vis:
+                            try:
+                                import time as __t
+                                _kg_vis_idx += 1
+                                ts = int(__t.time())
+                                out_png = os.path.join(
+                                    _kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png"
+                                )
+                                self.kg_service.export_png(out_png)
+                            except Exception:
+                                pass
                     yield (e, o)
-        # 更新实例中的可视化计数器，便于后续继续追加
-        self.kg_vis_idx = _kg_vis_idx
 
     # ----------------------------
     # 任务一结果格式导出

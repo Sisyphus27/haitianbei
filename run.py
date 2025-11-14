@@ -167,6 +167,8 @@ def main():
     parser.add_argument("--skip_kg", action="store_true", default=False, help="推理时跳过连接/使用KG，仅离线文本模式")
     parser.add_argument("--reset_kg", action="store_true", default=True,
                         help="运行前重置KG（保留固定节点），清理历史动态关系，避免残留占用/分配影响判定")
+    parser.add_argument("--disable_kg_vis", action="store_true", default=True,
+                        help="禁用KG可视化（导出PNG图片），大幅提升处理速度。默认禁用以提高性能。")
 
     # 与 Exp_Basic 兼容的占位参数（最小化保留）
     parser.add_argument("--use_gpu", action="store_true", help="是否使用 GPU（可选）")
