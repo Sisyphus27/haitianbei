@@ -1,4 +1,4 @@
-r"""
+"""
 Author: zy
 Date: 2025-10-22 17:35:46
 LastEditTime: 2025-10-23 19:49:44
@@ -18,6 +18,14 @@ if __package__ is None or __package__ == "":
         0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
     )
 
+import os
+import json
+import shutil
+import logging as _logging
+from typing import Any, Optional
+from typing import Dict, List, Tuple
+import time as _time
+
 from exp.exp_basic import Exp_Basic
 from exp.kg_service import KGServiceLocal
 from models.triples_extraction import extract_triples as _extract_triples
@@ -27,63 +35,129 @@ from data_provider.data_loader import (
     build_rules_sft_samples_from_md,
 )
 from data_provider.data_loader import load_events_from_file  # type: ignore
-import os
-import json
-import shutil
-from typing import Optional
-from typing import List, Tuple
-import time as _time
-import logging as _logging
 
-# 若未通过 run.py 配置 logging，则在本模块提供一个带时间的默认配置
-if not _logging.getLogger().handlers:
-    _logging.basicConfig(
-        level=_logging.INFO,
-        format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
-# 训练/推理相关的可选依赖（惰性导入）
+# 可选依赖：transformers / peft / datasets / bitsandbytes
 try:
     import transformers  # type: ignore
-except Exception:
+except Exception:  # pragma: no cover
     transformers = None  # type: ignore
 try:
     import peft  # type: ignore
-except Exception:
+except Exception:  # pragma: no cover
     peft = None  # type: ignore
 try:
     import datasets as _datasets  # type: ignore
-except Exception:
+except Exception:  # pragma: no cover
     _datasets = None  # type: ignore
 try:
-    import bitsandbytes as _bnb  # noqa: F401  # type: ignore
-except Exception:
+    import bitsandbytes as _bnb  # type: ignore
+except Exception:  # pragma: no cover
     _bnb = None  # type: ignore
-try:
-    import vllm  # type: ignore
-except Exception:
-    vllm = None  # type: ignore
 
 
-# 顶层内存数据集（可被 DataLoader 多进程 pickling）
 class _MemDS:
-    def __init__(self, arr):
-        # arr 应为已编码好的字典列表（包含 input_ids/labels 等）
-        self.arr = list(arr)
+    """极简内存数据集，兼容 Trainer 的 __len__/__getitem__ 接口。"""
 
-    def __len__(self):
+    def __init__(self, arr: List[dict]):
+        self.arr = arr
+
+    def __len__(self) -> int:  # pragma: no cover - 简单容器
         return len(self.arr)
 
-    def __getitem__(self, i):
+    def __getitem__(self, i: int) -> dict:  # pragma: no cover
         return self.arr[i]
 
 
 class Exp_main(Exp_Basic):
     def __init__(self, args):
+        # 在父类构造前开启延迟模型初始化，避免父类调用 _build_model 访问未就绪属性
+        self._defer_model_init = True
+        # 初始化一些成员，防止父类访问异常
+        self._judge_model = None
+        self._judge_tokenizer = None
+        self._judge_device = None
+        self._decomp_model = None
+        self._decomp_tokenizer = None
+        self._decomp_device = None
+        self._kg_initialized = False
+
+        # 提前设置 root，避免父类 __init__ 或早期调用 _ensure_kg_service 时访问缺失属性
+        try:
+            self.root = getattr(args, "root", os.getcwd())
+        except Exception:
+            self.root = os.getcwd()
+
+        # 提前初始化 Neo4j 连接相关属性，防止父类或其他早期调用访问缺失导致 AttributeError
+        # 使用 getattr 兜底 None，保持与后续逻辑一致
+        try:
+            self.neo4j_uri = getattr(args, "neo4j_uri", None)
+            self.neo4j_user = getattr(args, "neo4j_user", None)
+            self.neo4j_password = getattr(args, "neo4j_password", None)
+            self.neo4j_database = getattr(args, "neo4j_database", None)
+        except Exception:
+            self.neo4j_uri = None
+            self.neo4j_user = None
+            self.neo4j_password = None
+            self.neo4j_database = None
+        # 提前初始化 skip_kg / reset_kg 避免 _ensure_kg_service 使用时缺失
+        try:
+            self.skip_kg = getattr(args, "skip_kg", False)
+            self.reset_kg = bool(getattr(args, "reset_kg", False))
+        except Exception:
+            self.skip_kg = False
+            self.reset_kg = False
+
+        # 优先使用 CUDA：若检测到可用 GPU 且用户未强制指定 CPU，则自动切换到 CUDA，并补齐所需参数
+        torch_mod = None
+        try:
+            import torch as _torch_mod  # type: ignore
+
+            torch_mod = _torch_mod
+            cuda_available = _torch_mod.cuda.is_available()
+        except Exception:
+            cuda_available = False
+
+        # 确保必需的属性存在，避免父类 _acquire_device 访问失败
+        if not hasattr(args, "use_gpu"):
+            setattr(args, "use_gpu", False)
+        if not hasattr(args, "gpu"):
+            setattr(args, "gpu", 0)
+        if not hasattr(args, "use_multi_gpu"):
+            setattr(args, "use_multi_gpu", False)
+        if not hasattr(args, "devices"):
+            setattr(args, "devices", str(getattr(args, "gpu", 0)))
+
+        if cuda_available:
+            device_arg = str(getattr(args, "device", "auto")).lower()
+            if device_arg in ("auto", "cuda", "gpu", ""):
+                setattr(args, "device", "cuda")
+            setattr(args, "use_gpu", True)
+            if getattr(args, "use_multi_gpu", None) is None:
+                setattr(args, "use_multi_gpu", False)
+            if getattr(args, "use_multi_gpu", False):
+                devices_val = getattr(args, "devices", None)
+                if not devices_val:
+                    try:
+                        visible = torch_mod.cuda.device_count() if torch_mod else 1
+                        setattr(args, "devices", ",".join(str(i) for i in range(visible)))
+                    except Exception:
+                        setattr(args, "devices", str(getattr(args, "gpu", 0)))
+        else:
+            # 无 CUDA 时确保 device 参数为 cpu
+            if str(getattr(args, "device", "auto")).lower() == "auto":
+                setattr(args, "device", "cpu")
+            setattr(args, "use_gpu", False)
+            setattr(args, "use_multi_gpu", False)
+
         super(Exp_main, self).__init__(args)
-        # 根路径
-        self.root = getattr(args, "root", os.getcwd())
+        # 父类完成基础属性初始化后，允许 _build_model 进入真实加载流程
+        self._defer_model_init = False
+        # 根路径已在 super 调用前设置，这里不再重复，但若用户在运行期修改 args.root，可同步刷新
+        try:
+            if hasattr(args, "root") and args.root and args.root != self.root:
+                self.root = args.root
+        except Exception:
+            pass
         # Neo4j 连接参数
         self.neo4j_uri = getattr(args, "neo4j_uri", None)
         self.neo4j_user = getattr(args, "neo4j_user", None)
@@ -93,20 +167,36 @@ class Exp_main(Exp_Basic):
         self.skip_kg = getattr(args, "skip_kg", False)
         # 是否在构建前重置 KG（保留固定节点）（流推理中通常不需要）
         self.reset_kg = bool(getattr(args, "reset_kg", False))
-        # 基座模型目录（Qwen3-4B）
-        self.base_model_dir = getattr(
-            args, "base_model_dir", os.path.join(self.root, "models", "Qwen3-4B")
-        )
+        # 确保 base_model_dir/decomp_base_model_dir 在 _build_model 调用前可用
+        raw_base_model_dir = getattr(args, "base_model_dir", None)
+        if isinstance(raw_base_model_dir, str) and raw_base_model_dir:
+            base_model_dir = raw_base_model_dir
+        else:
+            base_model_dir = os.path.join(self.root, "models", "Qwen3-4B")
+            _logging.info(
+                f"[MODEL] base_model_dir 未传入，使用默认目录: {base_model_dir}"
+            )
+        setattr(args, "base_model_dir", base_model_dir)
+        self.base_model_dir = base_model_dir
+        decomp_arg = getattr(args, "decomp_base_model_dir", None)
+        decomp_dir = decomp_arg if isinstance(decomp_arg, str) and decomp_arg else base_model_dir
+        setattr(args, "decomp_base_model_dir", decomp_dir)
+        self.decomp_base_model_dir = decomp_dir
         # LoRA 输出目录
         self.lora_out_dir = getattr(
             args,
             "lora_out_dir",
             os.path.join(self.root, "results_entity_judge", "lora"),
         )
-        # 小LLM（问题分解）相关配置
-        self.decomp_base_model_dir = getattr(
-            args, "decomp_base_model_dir", self.base_model_dir
-        )
+        # 小LLM（问题分解）相关配置：优先使用 args.decomp_base_model_dir，否则回退到主模型目录
+        self.decomp_base_model_dir = getattr(args, "decomp_base_model_dir", None) or self.base_model_dir
+        self.generate_timeout_sec = float(getattr(args, "generate_timeout_sec", 120.0))
+        # 提升 CPU 场景的生成长度上限，避免输出被截断导致 JSON 不完整
+        self.cpu_max_new_tokens = int(getattr(args, "cpu_max_new_tokens", 256))
+        # 重试/降级策略配置
+        self.retry_max_new_tokens = int(getattr(args, "retry_max_new_tokens", 1024))
+        self.no_simple_fallback = bool(getattr(args, "no_simple_fallback", False))
+
         try:
             if not os.path.isdir(self.decomp_base_model_dir):
                 _logging.warning(
@@ -115,15 +205,7 @@ class Exp_main(Exp_Basic):
                 self.decomp_base_model_dir = self.base_model_dir
         except Exception:
             pass
-        # ===== 新增：模型与适配器缓存 =====
-        # HF/Transformers 缓存: key=(model_dir, lora_dir) -> (tokenizer, model)
-        self._hf_cache = {}
-        # 已确认缺失的 LoRA 适配器路径集合，避免重复尝试加载
-        self._lora_missing = set()
-        # vLLM 引擎缓存：key=model_dir -> llm 实例
-        self._vllm_cache = {}
-        # 已对 vLLM 实例加载的 LoRA 集合：key=(model_dir, lora_dir)
-        self._vllm_lora_loaded = set()
+
         # KG 可视化输出目录与计数器
         self.kg_vis_dir = os.path.join(self.root, "results", "kg_vis")
         self.kg_vis_idx = 0
@@ -143,74 +225,357 @@ class Exp_main(Exp_Basic):
         # 统一：仅通过 KGServiceLocal 封装访问 KG；保留 self.kg 引用以兼容旧代码，但不直接使用。
         self.kg_service = None
         self.kg = None  # 兼容旧逻辑；后续请使用 self.kg_service
-        if not self.skip_kg:
+
+        self._ensure_kg_service()
+
+    def _ensure_kg_service(self) -> None:
+        """惰性初始化 KG 服务，确保在需要时可用。"""
+        if getattr(self, "_kg_initialized", False):
+            return
+
+        self._kg_initialized = True
+        if getattr(self, "skip_kg", False):
+            return
+
+        try:
+            _raw_kg = Dataset_KG(
+                getattr(self, "root", os.getcwd()),
+                load_data=False,
+                neo4j_uri=self.neo4j_uri,
+                neo4j_user=self.neo4j_user,
+                neo4j_password=self.neo4j_password,
+                neo4j_database=self.neo4j_database,
+            )
             try:
-                _raw_kg = Dataset_KG(
-                    self.root,
-                    load_data=False,
-                    neo4j_uri=self.neo4j_uri,
-                    neo4j_user=self.neo4j_user,
-                    neo4j_password=self.neo4j_password,
-                    neo4j_database=self.neo4j_database,
-                )
-                # 统一封装为本地服务，后续所有操作均通过 service 进行
+                self.kg_service = KGServiceLocal(_raw_kg)
+                self.kg = self.kg_service.kg
+            except Exception:
+                self.kg_service = None
+
+            if self.reset_kg and self.kg_service is not None:
                 try:
-                    self.kg_service = KGServiceLocal(_raw_kg)
-                    self.kg = self.kg_service.kg  # 仅兼容引用
-                except Exception:
-                    self.kg_service = None
-
-                # 根据开关通过 kg_service 执行 reset，更贴近真实运行路径
-                if self.reset_kg and self.kg_service is not None:
-                    try:
-                        self.kg_service.reset_graph(keep_fixed=True)
-                        _logging.info(
-                            "[KG] (init) reset_graph 已执行，已清理历史动态关系，仅保留固定节点。"
-                        )
-                    except Exception:
-                        pass
-
-                    # 清空旧的可视化目录
-                    try:
-                        if os.path.isdir(self.kg_vis_dir):
-                            for _f in os.listdir(self.kg_vis_dir):
-                                _fp = os.path.join(self.kg_vis_dir, _f)
-                                if os.path.isfile(_fp):
-                                    os.remove(_fp)
-                    except Exception:
-                        pass
-
-                # 确保目录存在
-                try:
-                    os.makedirs(self.kg_vis_dir, exist_ok=True)
-                except Exception:
-                    pass
-
-                # 初始快照
-                try:
-                    _snap = self.kg_service.graph_snapshot() if self.kg_service else {}
+                    self.kg_service.reset_graph(keep_fixed=True)
                     _logging.info(
-                        f"[KG] (init) snapshot nodes={_snap.get('nodes_count')} edges={_snap.get('edges_count')}"
+                        "[KG] (init) reset_graph 已执行，已清理历史动态关系，仅保留固定节点。"
                     )
                 except Exception:
                     pass
-            except Exception as _e:
-                _logging.info(f"[KG] 初始化失败，进入跳过模式：{_e}")
-                self.kg_service = None
+
+                try:
+                    if os.path.isdir(self.kg_vis_dir):
+                        for _f in os.listdir(self.kg_vis_dir):
+                            _fp = os.path.join(self.kg_vis_dir, _f)
+                            if os.path.isfile(_fp):
+                                os.remove(_fp)
+                except Exception:
+                    pass
+
+            try:
+                os.makedirs(self.kg_vis_dir, exist_ok=True)
+            except Exception:
+                pass
+
+            try:
+                _snap = self.kg_service.graph_snapshot() if self.kg_service else {}
+                _logging.info(
+                    f"[KG] (init) snapshot nodes={_snap.get('nodes_count')} edges={_snap.get('edges_count')}"
+                )
+            except Exception:
+                pass
+        except Exception as _e:
+            _logging.info(f"[KG] 初始化失败，进入跳过模式：{_e}")
+            self.kg_service = None
 
     def _build_model(self):
-        """占位，满足基类在构造时的要求（torch 可选）。"""
+        """根据当前模式加载判决/分解模型。"""
+        if getattr(self, "_defer_model_init", False):
+            return {"judge": None, "decomp": None}, []
+
+        self._ensure_kg_service()
+
+        if getattr(self, "_models_ready", False):
+            return self._model_handles, []
+
+        if transformers is None:
+            raise RuntimeError("需要安装 transformers 才能加载推理模型")
+
         try:
-            import torch.nn as nn  # type: ignore
+            import torch  # type: ignore
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError("需要安装 torch 才能加载推理模型") from exc
 
-            return nn.Identity(), []
+        from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+
+        def _resolve_device(prefer: str) -> str:
+            prefer = (prefer or "auto").lower()
+            cuda_ok = torch.cuda.is_available()
+            if prefer == "cpu":
+                return "cpu"
+            if prefer == "cuda":
+                return "cuda" if cuda_ok else "cpu"
+            return "cuda" if cuda_ok else "cpu"
+
+        prefer_device = str(getattr(self.args, "device", "auto"))
+        target_device = _resolve_device(prefer_device)
+
+        # 统一模型路径来源：完全依赖 __init__ 中从 args 注入的 base_model_dir / decomp_base_model_dir
+        base_model_dir = self.base_model_dir
+
+        # 校验 Transformers 模型目录（避免误传 GGUF 目录导致报错）
+        def _is_transformers_dir(path: str) -> bool:
+            try:
+                if not path or not os.path.isdir(path):
+                    return False
+                # GGUF 目录通常含 .gguf 文件或名称包含 GGUF
+                if "GGUF" in os.path.basename(path).upper():
+                    return False
+                cfg_path = os.path.join(path, "config.json")
+                if not os.path.isfile(cfg_path):
+                    return False
+                import json as _json
+
+                with open(cfg_path, "r", encoding="utf-8") as _f:
+                    cfg = _json.load(_f)
+                return isinstance(cfg, dict) and bool(cfg.get("model_type"))
+            except Exception:
+                return False
+
+        if not _is_transformers_dir(base_model_dir):
+            # 自动回退到仓库内可能的 Transformers 检查点
+            candidates = [
+                os.path.join(self.root, "models", "Qwen3-4B"),
+                os.path.join(self.root, "models", "Qwen2_5-3B"),
+            ]
+            fallback = None
+            for c in candidates:
+                if _is_transformers_dir(c):
+                    fallback = c
+                    break
+            if fallback is None:
+                raise RuntimeError(
+                    f"[MODEL] 非法的 Transformers 模型目录: {base_model_dir}。请提供包含 config.json 且含 model_type 的目录（非 GGUF）。"
+                )
+            _logging.warning(
+                f"[MODEL] 检测到非 Transformers 目录或缺少 config: {base_model_dir}，自动回退到: {fallback}"
+            )
+            base_model_dir = fallback
+            self.base_model_dir = fallback
+            try:
+                setattr(self.args, "base_model_dir", fallback)
+            except Exception:
+                pass
+
+        decomp_model_dir = self.decomp_base_model_dir or base_model_dir
+        if not _is_transformers_dir(decomp_model_dir):
+            _logging.warning(
+                f"[MODEL] decomp_base_model_dir 无效或为 GGUF: {decomp_model_dir}，回退到主模型目录"
+            )
+            decomp_model_dir = base_model_dir
+        self.decomp_base_model_dir = decomp_model_dir
+
+        judge_lora_dir = getattr(self.args, "lora_adapter_dir", None)
+        decomp_lora_dir = getattr(self.args, "decomp_lora_adapter_dir", None)
+
+        shared_cache: Dict[Tuple[str, Optional[str]], Dict[str, Any]] = {}
+
+        def _load_handle(model_dir: str, lora_dir: Optional[str], tag: str) -> Dict[str, Any]:
+            if not model_dir or not os.path.isdir(model_dir):
+                raise RuntimeError(f"[MODEL] {tag} 模型目录不存在: {model_dir}")
+
+            key = (model_dir, lora_dir or None)
+            if key in shared_cache:
+                return shared_cache[key]
+
+            _logging.info(f"[MODEL] 加载 {tag} 基座: {model_dir}")
+            tok = AutoTokenizer.from_pretrained(
+                model_dir, trust_remote_code=True, use_fast=False
+            )
+            if tok.pad_token is None:
+                tok.pad_token = tok.eos_token
+
+            load_kwargs: Dict[str, Any] = {"trust_remote_code": True}
+            use_half = False
+            quantized = False
+            quant_tag = "none"
+            # 配置 judge 量化：auto/none/int8/int4；decomp 维持默认（CUDA优先fp16）
+            judge_quant = str(getattr(self.args, "judge_quant", "auto")).lower()
+            if tag == "judge":
+                if judge_quant in ("int8", "auto"):
+                    if _bnb is not None:
+                        try:
+                            from transformers import BitsAndBytesConfig  # type: ignore
+
+                            if judge_quant == "int8" or judge_quant == "auto":
+                                bnb_cfg = BitsAndBytesConfig(load_in_8bit=True)
+                                load_kwargs["quantization_config"] = bnb_cfg
+                                quantized = True
+                                quant_tag = "int8"
+                                _logging.info("[MODEL] judge 使用 8bit 量化 (bitsandbytes)")
+                        except Exception as _qe:
+                            _logging.warning(f"[MODEL] 8bit 量化初始化失败，将按非量化路径: {_qe}")
+                    elif judge_quant == "int8":
+                        _logging.warning("[MODEL] 请求 int8 但未安装 bitsandbytes，忽略量化请求")
+
+                if (not quantized) and judge_quant == "int4":
+                    if _bnb is not None:
+                        try:
+                            from transformers import BitsAndBytesConfig  # type: ignore
+
+                            # 常用 nf4 配置；计算精度使用 float16 以兼顾显存与稳定性
+                            bnb_cfg = BitsAndBytesConfig(
+                                load_in_4bit=True,
+                                bnb_4bit_use_double_quant=True,
+                                bnb_4bit_quant_type="nf4",
+                                bnb_4bit_compute_dtype=torch.float16,
+                            )
+                            load_kwargs["quantization_config"] = bnb_cfg
+                            quantized = True
+                            quant_tag = "int4"
+                            _logging.info("[MODEL] judge 使用 4bit 量化 (nf4)")
+                        except Exception as _qe:
+                            _logging.warning(f"[MODEL] 4bit 量化初始化失败，将按非量化路径: {_qe}")
+                    else:
+                        _logging.warning("[MODEL] 请求 int4 但未安装 bitsandbytes，忽略量化请求")
+
+                # judge_quant==none：显式不量化，走下方 half 路径
+
+            # 非量化（或量化失败）时，如为 CUDA 则优先使用 float16
+            if (not quantized) and isinstance(target_device, str) and target_device.startswith("cuda"):
+                try:
+                    if torch.cuda.is_available():
+                        load_kwargs["torch_dtype"] = torch.float16
+                        use_half = True
+                except Exception:
+                    pass
+
+            model = AutoModelForCausalLM.from_pretrained(model_dir, **load_kwargs)
+
+            if lora_dir:
+                if not os.path.isdir(lora_dir):
+                    _logging.warning(f"[MODEL] LoRA 目录不存在({tag}): {lora_dir}")
+                else:
+                    if peft is None:
+                        raise RuntimeError("需要安装 peft 才能加载 LoRA 适配器")
+                    from peft import PeftModel  # type: ignore
+
+                    _logging.info(f"[MODEL] 应用 {tag} LoRA: {lora_dir}")
+                    model = PeftModel.from_pretrained(model, lora_dir)
+
+            model.eval()
+            # 如果已经量化（int8/int4），不再强制 dtype 转换；否则按原逻辑将模型移到目标设备
+            if not quantized:
+                try:
+                    if use_half:
+                        try:
+                            model = model.to(device=target_device, dtype=torch.float16)  # type: ignore[arg-type]
+                        except Exception:
+                            model = model.to(target_device)  # type: ignore[call-arg]
+                            try:
+                                model = model.to(torch.float16)  # type: ignore[arg-type]
+                            except Exception:
+                                pass
+                    else:
+                        model = model.to(target_device)  # type: ignore[call-arg]
+                except Exception:
+                    _logging.warning(
+                        f"[MODEL] 无法将 {tag} 模型移动到 {target_device}，保留当前设备"
+                    )
+
+            try:
+                model.requires_grad_(False)
+            except Exception:
+                try:
+                    for _param in model.parameters():
+                        _param.requires_grad = False
+                except Exception:
+                    pass
+
+            try:
+                model_device = next(model.parameters()).device
+            except Exception:
+                model_device = torch.device(target_device)
+
+            # 运行时摘要日志：明确实际采用的量化/精度与设备
+            try:
+                try:
+                    _dtype = str(next(model.parameters()).dtype)
+                except Exception:
+                    _dtype = "unknown"
+                _quant = quant_tag if tag == "judge" else "none (decomp)"
+                _logging.info(
+                    f"[MODEL] {tag} ready: quant={_quant} dtype={_dtype} device={model_device}"
+                )
+            except Exception:
+                pass
+
+            handle = {
+                "tokenizer": tok,
+                "model": model,
+                "device": model_device,
+                "model_dir": model_dir,
+                "lora_dir": lora_dir,
+            }
+            shared_cache[key] = handle
+            return handle
+
+        handles: Dict[str, Dict[str, Any]] = {}
+        handles["judge"] = _load_handle(base_model_dir, judge_lora_dir, "judge")
+
+        # 仅在明确需要时加载分解器：启用标志或要求打印分解结果
+        _need_decomp = bool(
+            getattr(self.args, "enable_decomposer", False)
+            or getattr(self.args, "print_decomposition", False)
+        )
+        if _need_decomp:
+            try:
+                handles["decomp"] = _load_handle(
+                    decomp_model_dir, decomp_lora_dir, "decomp"
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logging.warning(f"[MODEL] 分解模型加载失败，跳过：{exc}")
+                handles["decomp"] = {
+                    "tokenizer": None,
+                    "model": None,
+                    "device": None,
+                    "model_dir": decomp_model_dir,
+                    "lora_dir": decomp_lora_dir,
+                }
+        else:
+            _logging.info(
+                "[MODEL] 跳过 decomp 加载：未启用 enable_decomposer/print_decomposition"
+            )
+            handles["decomp"] = {
+                "tokenizer": None,
+                "model": None,
+                "device": None,
+                "model_dir": decomp_model_dir,
+                "lora_dir": decomp_lora_dir,
+            }
+
+        self._model_handles = handles
+        self._models_ready = True
+
+        judge_handle = handles.get("judge", {})
+        decomp_handle = handles.get("decomp", {})
+        self._judge_tokenizer = judge_handle.get("tokenizer")
+        self._judge_model = judge_handle.get("model")
+        self._judge_device = judge_handle.get("device")
+        self._decomp_tokenizer = decomp_handle.get("tokenizer")
+        self._decomp_model = decomp_handle.get("model")
+        self._decomp_device = decomp_handle.get("device")
+
+        self.model = handles
+        self.parameters1 = []
+
+        # 设备可见性日志，便于确认是否在 CUDA 上运行
+        try:
+            _logging.info(
+                f"[MODEL] devices -> judge: {self._judge_device} | decomp: {self._decomp_device}"
+            )
         except Exception:
+            pass
 
-            class DummyModel:
-                def to(self, device):
-                    return self
-
-            return DummyModel(), []
+        return handles, []
 
     def run(self):
         """统一入口：根据 mode 执行 LoRA/MARL 训练或事件流冲突判定。"""
@@ -360,6 +725,21 @@ class Exp_main(Exp_Basic):
         # 默认：stream-judge
         if mode != "stream-judge":
             return  # 已在上面返回
+        try:
+            model_handles, _ = self._build_model()
+        except Exception as exc:  # noqa: BLE001
+            _logging.error(f"[STREAM] 模型加载失败: {exc}")
+            return {"error": "model_init_failed", "message": str(exc)}
+
+        if not isinstance(model_handles, dict):
+            _logging.error("[STREAM] 模型句柄返回异常类型")
+            return {"error": "invalid_model_handles"}
+
+        judge_entry = model_handles.get("judge")
+        if not isinstance(judge_entry, dict) or judge_entry.get("model") is None:
+            _logging.error("[STREAM] 判定模型未正确初始化")
+            return {"error": "missing_judge_model"}
+
         events_file = getattr(self.args, "events_file", None)
         # 若未显式提供，尝试回退到 tests/events_sample.txt
         if not events_file or not os.path.isfile(events_file):
@@ -376,14 +756,12 @@ class Exp_main(Exp_Basic):
                 return {"error": "missing_events_file"}
         # 统一通过 loader 读取事件：支持 .txt（每行一条）与 .jsonl（优先取 text/event/input 字段）
         try:
-            events = load_events_from_file(events_file)
+            events = load_events_from_file(events_file)[:5]
         except Exception:
             # 兜底：按纯文本逐行
             with open(events_file, "r", encoding="utf-8") as f:
                 events = [ln.strip() for ln in f if ln.strip()]
         rules_md_path = getattr(self.args, "rules_md_path", None)
-        lora_adapter_dir = getattr(self.args, "lora_adapter_dir", None)
-        use_vllm = not bool(getattr(self.args, "no_vllm", False))
         batch_size = max(1, int(getattr(self.args, "batch_size", 4)))
         simple_output = bool(getattr(self.args, "simple_output", False))
 
@@ -396,8 +774,6 @@ class Exp_main(Exp_Basic):
                 self.warmup_models(
                     judge=True,
                     decomp=not _decomp_skip,
-                    lora_adapter_dir=lora_adapter_dir,
-                    use_vllm=use_vllm,
                     order=_order,
                     timeout_sec=_timeout,
                 )
@@ -424,8 +800,6 @@ class Exp_main(Exp_Basic):
         for ev, out in self.stream_judge_conflicts(
             events_iter=events,
             rules_md_path=rules_md_path,
-            lora_adapter_dir=lora_adapter_dir,
-            use_vllm=use_vllm,
             batch_size=batch_size,
             simple_output=simple_output,
             show_decomposition=bool(getattr(self.args, "print_decomposition", False)),
@@ -439,6 +813,16 @@ class Exp_main(Exp_Basic):
                 pass
             _logging.info("-" * 60)
         _logging.info("=== Stream Judge End ===")
+        # 导出任务一格式（若指定路径）
+        try:
+            _export_path = getattr(self.args, "export_task1_json", None)
+            if _export_path:
+                self.export_task1_results(out_path=_export_path)
+        except Exception as _e:
+            try:
+                _logging.warning(f"[EXPORT-TASK1] 导出失败: {_e}")
+            except Exception:
+                pass
         return {"count": count}
 
     # ----------------------------
@@ -462,8 +846,8 @@ class Exp_main(Exp_Basic):
         )  # 去空白行
         # 前缀提示：
         prefix = (
-            "你是一名航保作业规则判定助手。基于以下规则文档进行严谨的合规性判断，"
-            "当输入一段新事件文本时，需要结合当前知识图谱状态，回答是否与现有状态或规则冲突，并给出依据。\n\n"
+            "你是一名航保作业助手。你的主要任务是根据知识图谱和文本信息来整理航保作业状态"
+            # "当输入一段新事件文本时，需要结合当前知识图谱状态，回答是否与现有状态或规则冲突，并给出依据。\n\n"
             "【规则文档】\n"
         )
         return prefix + md
@@ -510,16 +894,66 @@ class Exp_main(Exp_Basic):
             "任务：判断以下事件是否与当前状态或规则冲突。\n"
             "输出格式：先给出结论（合规/冲突），再给出1-3条依据，最后给出可操作建议。\n"
         )
-        parts = [rules_text, kg_text, "【事件】\n" + event_text, instruction]
+        # 将指令置顶，其次是规则、KG与事件，避免模型先复述上下文
+        parts = [instruction, rules_text, kg_text, "【事件】\n" + event_text]
         return "\n\n".join([p for p in parts if p])
-
+    
     def _format_conflict_prompt_with_mode(
-        self, event_text: str, rules_text: str, kg_text: str, *, simple: bool = False
-    ) -> str:
-        """根据 simple 模式切换输出要求：
-        - simple=False：结论+依据+建议
-        - simple=True：仅输出“合规”或“冲突”二字之一
+    self,
+    event_text: str,
+    rules_text: str,
+    kg_text: str,
+    *,
+    simple: bool = False,
+    conflict_judge: bool = True,
+        ) -> str:
+        """根据模式构造提示。
+
+        参数:
+        - simple: 仅在 conflict_judge=True 时可用；输出“合规”或“冲突”二字之一。
+        - conflict_judge=True: 抽取时空信息 + 判定冲突；需输出 判定/reason/suggest。
+        - conflict_judge=False: 用于任务一时空解析输出，不做冲突判断，按“时空信息/历史统计/态势预测”句式输出。
         """
+        if not conflict_judge:
+            # === 任务一：仅做时空/历史/态势解析，输出标准 JSON（支持多条） ===
+            instruction = (
+                "你是一个严格的时空信息解析器。\n"
+                "【任务】依据提供的事件文本与知识图谱，抽取该时刻的作业与状态，并以固定 JSON 结构输出。\n\n"
+                "【输出要求（非常重要）】\n"
+                "1. 只能输出一个 JSON 对象，且必须位于 JSON_START 与 JSON_END 两行之间。\n"
+                "2. 禁止在 JSON 外输出任何文字、解释、分析、空行或 Markdown 代码块（例如 ```）。\n"
+                "3. 所有键名必须使用半角双引号，JSON 可被标准解析器解析。\n\n"
+                "【字段与多条规则】\n"
+                "1) \"time\"：归一化时间，格式 \"YYYY-MM-DD HH:MM:SS\"；无法确定时填空字符串 \"\"。\n"
+                "2) \"时空信息 01..NN\"：按出现顺序编号（两位补零，名称与编号之间有空格）。每条为一个完整中文句子，结尾以全角分号 \"；\" 收尾。\n"
+                "   - 句式示例A：\"飞机 A001，正在开展作业，着陆作业，推理耗时 0.1秒，对应能力项（飞机ID，作业关系）；\"\n"
+                "   - 句式示例B：\"飞机 A001，处于，移动中（速度 15.2米/秒），推理耗时 0.2秒，对应能力项（飞机ID，飞机状态、状态关系）；\"\n"
+                "   - 如存在速度、位置、牵引车/停机位等要素，请自然融入句中（速度以括号形式，例如（速度 5米/秒））。\n"
+                "3) \"历史信息 01..NN\"（尽量）：两位补零编号的中文句子，用于作业历史统计，如：\n"
+                "   - \"飞机 A001 牵引作业 已作业 1分钟，推理耗时 0.02秒，对应能力项（作业时长）；\"\n"
+                "   - 亦可用同义键名 \"历史统计 01..NN\"（推荐统一输出为 历史信息）。\n"
+                "4) \"态势感知 01..NN\"（尽量）：两位补零编号的中文句子，用于当前/后续态势，如：\n"
+                "   - \"牵引至 14号停机位 剩余作业时长 预计 9分钟完成，推理耗时 0.03秒，对应能力项（预计剩余作业时长）；\"\n"
+                "   - 亦可用同义键名 \"态势预测 01..NN\"（推荐统一输出为 态势感知）。\n\n"
+                "【严格约束】\n"
+                "- 必须至少包含键 \"time\" 与 \"时空信息 01\"。若无法抽取内容，\"时空信息 01\" 的值使用空字符串。\n"
+                "- 每一条中文句子均以全角分号结束，且包含 \"对应能力项（...）\" 子句，能力项从：飞机ID、作业关系、飞机状态、状态关系、位置关系、停机位ID 中择有即列。\n"
+                "- 严禁出现 \"判定\"、\"reason\"、\"suggest\" 等与冲突判定相关的键。\n"
+                "- 不要输出示例、说明文字或任何与 JSON 无关的内容。\n\n"
+                "【最终输出格式（仅以下三行，注意不要加其他内容）】\n"
+                "JSON_START\n"
+                "{...}\n"
+                "JSON_END"
+            )
+            # 抽取模式不拼接规则文本，减少干扰；只给 KG + 事件
+            parts = [
+                instruction,
+                kg_text.strip() if kg_text else "",
+                "【事件】\n" + event_text.strip(),
+            ]
+            return "\n\n".join([p for p in parts if p])
+
+        # === 以下是冲突判定模式，结构可以保持不变，仅略微强化“只输出 JSON”约束 ===
         if simple:
             instruction = (
                 "任务：判断以下事件是否与当前状态或规则冲突。\n"
@@ -528,31 +962,120 @@ class Exp_main(Exp_Basic):
                 "冲突\n"
             )
         else:
-            # 新版要求：按“时刻”聚合输出多个“时空信息xx”，每条时空信息需携带合规判断与依据建议
-            # 统一规范到单一 JSON（或 JSON 数组），便于稳定解析
             instruction = (
-                "任务：判断以下事件是否与当前状态或规则冲突；并将事件解析为按时刻聚合的多条‘时空信息’。\n"
-                "请严格只输出 JSON（不得包含示例、解释、或 Markdown 代码围栏）。\n"
-                "输出要求：可以是一个对象或一个数组（数组中每个元素是对象），其结构如下：\n"
-                "对象结构：\n"
-                "{\n"
-                '  "time": "YYYY-MM-DD HH:MM:SS",   // 从事件文本中提取并归一化（如 2025年7月1日 08:00:00 -> 2025-07-01 08:00:00）\n'
-                '  "时空信息01": {\n'
-                '      "text": string,               // 对应该时刻的关键信息摘要，如“飞机A001，正在开展作业，着陆作业（速度15.2米/秒）”\n'
-                '      "compliance": "合规" | "冲突",\n'
-                '      "reasons": [ { "rule": string, "description": string } ], // 最多3条，若合规则可为空数组\n'
-                '      "suggestion": string         // 若合规则可写"无"\n'
-                '  },\n'
-                '  "时空信息02": { ... },\n'
-                '  ...\n'
-                "}\n"
-                "注意事项：\n"
-                "- 仅依据提供的规则文档与KG状态，不得虚构；\n"
-                "- 若无法从文本中提取精确时刻，可将原文时刻规范化后填写；\n"
-                "- 若该事件仅包含一个时刻，仍按上述结构输出一个对象；\n"
-                "- 不要输出除 JSON 外的任何文本；不要使用 ```json 代码块。\n"
+                "任务：解析事件中的所有时空作业信息，并基于规则+KG判定是否冲突。\n"
+                "只输出一个 JSON 对象，且必须放在 JSON_START 与 JSON_END 之间；不得出现任何额外文字/Markdown。\n"
+                "键与顺序（必须按照此顺序排列）：\n"
+                "1) time: 归一化时间 YYYY-MM-DD HH:MM:SS；若事件含多个时刻，可填首个关键时刻；缺失可填空字符串。\n"
+                "2) 时空信息01..NN: 按出现顺序编号的对象，每个对象尽可能包含以下键（缺失可省略）：\n"
+                "   - 时间、飞机ID、停机位ID、作业ID、飞机状态、停机位状态、作业持续时间、预测剩余作业时间\n"
+                "3) 判定: 仅 '合规' 或 '冲突'。\n"
+                "4) reason: 冲突/合规的精炼依据，1-3 条短句组成的数组；无则 [].\n"
+                "5) suggest: 操作性建议；若合规填 '无'。\n"
+                "严格要求：\n"
+                "- 时空信息01..NN 必须全部在前；判定/reason/suggest 放在最后。\n"
+                "- 必须至少包含 '时空信息01' 键；若文本无法抽取任何要素，'时空信息01' 的值使用空对象 {}。\n"
+                "- 不得输出除上述以外的键；不得输出示例、解释或代码围栏以外文本。\n"
+                "- 时间需归一化为 YYYY-MM-DD HH:MM:SS；无法确定具体日期可采用同一日期占位。\n"
+                "输出格式（仅以下三行）：\n"
+                "JSON_START\n"
+                "{...}\n"
+                "JSON_END"
             )
-        parts = [rules_text, kg_text, "【事件】\n" + event_text, instruction]
+        parts = [instruction, rules_text, kg_text, "【事件】\n" + event_text]
+        return "\n\n".join([p for p in parts if p])
+
+    def _format_conflict_prompt_with_mode1(
+        self,
+        event_text: str,
+        rules_text: str,
+        kg_text: str,
+        *,
+        simple: bool = False,
+        conflict_judge: bool = True,
+    ) -> str:
+        """根据模式构造提示。
+
+        参数:
+        - simple: 仅在 conflict_judge=True 时可用；输出“合规”或“冲突”二字之一。
+        - conflict_judge=True: 抽取时空信息 + 判定冲突；需输出 判定/reason/suggest。
+        - conflict_judge=False: 仅抽取时空信息（不拼接规则文本，不输出 判定/reason/suggest）。
+        """
+        if not conflict_judge:
+            # 抽取模式（无冲突判断）——与任务示例格式一致，但省略判定/reason/suggest。
+            instruction = (
+                "任务：解析事件中的所有时空作业信息。\n"
+                "只输出一个 JSON，对象须位于 JSON_START 与 JSON_END 之间；不得出现任何额外文字/Markdown。\n"
+                "键与顺序（必须按照此顺序排列）：\n"
+                "1) time: 归一化时间 YYYY-MM-DD HH:MM:SS；若事件含多个时刻，可填首个关键时刻；缺失填空字符串。\n"
+                "2) 时空信息01..NN: 按出现顺序编号的对象，每个对象尽可能包含以下键（缺失可省略）：\n"
+                "   - 时间、飞机ID、停机位ID、作业ID、飞机状态、停机位状态、作业持续时间、预测剩余作业时间\n"
+                "严格要求：\n"
+                "- 必须至少包含 '时空信息01' 键；若无法抽取任何要素，值使用空对象 {}。\n"
+                "- 不得出现判定/reason/suggest 等键。\n"
+                "- 不得输出示例解释或多余文本。\n"
+                "示例（仅用于理解，不要照抄）：\n"
+                "JSON_START\n"
+                "{\n"
+                "  \"time\": \"2025-07-01 08:00:00\",\n"
+                "  \"时空信息01\": {\"时间\": \"2025-07-01 08:00:00\", \"飞机ID\": \"A001\"},\n"
+                "  \"时空信息02\": {\"时间\": \"2025-07-01 08:05:00\", \"停机位ID\": \"08\"}\n"
+                "}\n"
+                "JSON_END\n"
+                "输出格式（仅以下三行）：\n"
+                "JSON_START\n"
+                "{...}\n"
+                "JSON_END"
+            )
+            # 抽取模式不拼接规则文本，减少干扰
+            parts = [instruction, kg_text, "【事件】\n" + event_text]
+            return "\n\n".join([p for p in parts if p])
+
+        # 以下为冲突判定模式
+        if simple:
+            instruction = (
+                "任务：判断以下事件是否与当前状态或规则冲突。\n"
+                "仅输出下列两者之一（不得包含任何额外文字/标点/代码块）：\n"
+                "合规\n"
+                "冲突\n"
+            )
+        else:
+            instruction = (
+                "任务：解析事件中的所有时空作业信息，并基于规则+KG判定是否冲突。\n"
+                "只输出一个 JSON 对象，且必须放在 JSON_START 与 JSON_END 之间；不得出现任何额外文字/Markdown。\n"
+                "键与顺序（必须按照此顺序排列）：\n"
+                "1) time: 归一化时间 YYYY-MM-DD HH:MM:SS；若事件含多个时刻，可填首个关键时刻；缺失可填空字符串。\n"
+                "2) 时空信息01..NN: 按出现顺序编号的对象，每个对象尽可能包含以下键（缺失可省略）：\n"
+                "   - 时间、飞机ID、停机位ID、作业ID、飞机状态、停机位状态、作业持续时间、预测剩余作业时间\n"
+                "3) 判定: 仅 '合规' 或 '冲突'。\n"
+                "4) reason: 冲突/合规的精炼依据，1-3 条短句组成的数组；无则 [].\n"
+                "5) suggest: 操作性建议；若合规填 '无'。\n"
+                "严格要求：\n"
+                "- 时空信息01..NN 必须全部在前；判定/reason/suggest 放在最后。\n"
+                "- 必须至少包含 '时空信息01' 键；若文本无法抽取任何要素，'时空信息01' 的值使用空对象 {}，不要省略该键。\n"
+                "- 不得输出除上述以外的键；不得输出示例、解释或代码围栏以外文本。\n"
+                "- 时间需归一化为 YYYY-MM-DD HH:MM:SS；无法确定具体日期可采用同一日期占位。\n"
+                "示例（仅用于理解，不要照抄内容）：\n"
+                "JSON_START\n"
+                "{\n"
+                "  \"time\": \"2025-07-01 08:00:00\",\n"
+                "  \"时空信息01\": {\n"
+                "    \"时间\": \"2025-07-01 08:00:00\", \"飞机ID\": \"A001\", \"停机位ID\": \"08\"\n"
+                "  },\n"
+                "  \"时空信息02\": {\n"
+                "    \"时间\": \"2025-07-01 08:02:00\", \"飞机状态\": \"到位\"\n"
+                "  },\n"
+                "  \"判定\": \"冲突\",\n"
+                "  \"reason\": [\"停机位08已占用\"],\n"
+                "  \"suggest\": \"改派空位\"\n"
+                "}\n"
+                "JSON_END\n"
+                "输出格式（仅以下三行）：\n"
+                "JSON_START\n"
+                "{...}\n"
+                "JSON_END"
+            )
+        parts = [instruction, rules_text, kg_text, "【事件】\n" + event_text]
         return "\n\n".join([p for p in parts if p])
 
     def _format_decompose_prompt(
@@ -560,38 +1083,40 @@ class Exp_main(Exp_Basic):
     ) -> str:
         """为小LLM构造问题分解提示，要求输出 JSON 结构，聚焦三类冲突。
 
-        目标输出示例：
-        {
-            "entities": ["飞机A001", "跑道Z", "停机位14"],
-            "applicable_rules": ["跑道同一时刻仅一架", "停机位一次仅一架"],
-            "potential_conflicts": ["跑道Z 已被 飞机B12 使用", "停机位14 已有关联飞机 飞机C01"],
-            "notes": "仅围绕跑道/停机位/牵引三类冲突分解"
-        }
+        目标输出示例（说明用，不要抄写内容）：
+        JSON_START
+        {"entities": ["飞机A001", "跑道Z"], "applicable_rules": ["……"], "potential_conflicts": [], "evidence": [], "notes": "none"}
+        JSON_END
+
+        说明：小模型参数量较小，移除 KG 文本上下文，仅保留规则文档与事件文本，以降低提示长度并减少幻觉概率。
         """
-        # 升级版分解指令：强调 JSON Schema、禁止幻觉、扩展规则类别并限制数量，便于后处理稳定解析
+        # 强化版分解指令：将指令置顶，严格禁止代码块与额外文本，加入 JSON_START/JSON_END 约束
         instruction = (
-            "请分解以下‘航保作业冲突判定’任务，并严格只输出一个 JSON 对象(不得有额外文字/Markdown/前后缀)。\n"
-            "JSON 字段顺序与含义：\n"
+            "你是一名严格的时空作业分解器。\n"
+            "只做结构化分解，不做最终合规/冲突判定。\n"
+            "输出要求（必须全部满足）：\n"
+            "- 仅输出一个 JSON 对象，且必须位于 JSON_START 与 JSON_END 两行之间。\n"
+            "- 严禁在 JSON 外输出任意文字、提示、说明、前后缀或空行。\n"
+            "- 严禁使用任何 Markdown 代码块（例如 ``` 或 ```json）。出现即视为错误输出。\n"
+            "- 所有键名与字符串值均使用英文双引号。\n"
+            "JSON 字段与约束：\n"
             "{\n"
-            '  "entities": [str,...],            // 事件文本中出现的关键实体，限定：飞机/跑道/停机位/牵引车；原样字符串；去重保持出现顺序；最多10个\n'
-            '  "applicable_rules": [str,...],    // 可能相关的规则要点精炼短句：涵盖互斥/占用/放行许可/依赖/状态一致性/转运约束/设备服务范围；每条≤40字；最多8条\n'
-            '  "potential_conflicts": [str,...], // 基于 KG 状态推测的潜在冲突（如：跑道Z 已被 飞机A001 占用；停机位14 与等待时间未满足）；最多5条；若无则空数组\n'
-            '  "evidence": [str,...],            // (可选) 每条冲突的支撑：KG 三元组或节点状态片段，如 ‘关系: 飞机A001 -[占用]-> 跑道Z’；可为空或缺省\n'
-            '  "notes": ""                  // 若 potential_conflicts 为空则填 "none"；否则留空字符串\n'
+            '  "entities": [str,...],            // 事件中出现的关键实体（飞机/跑道/停机位/牵引车）；按出现顺序去重；最多10个\n'
+            '  "applicable_rules": [str,...],    // 可能相关的规则要点，涵盖互斥/占用/许可/依赖/状态一致性/转运约束/设备范围；每条≤40字；最多8条\n'
+            '  "potential_conflicts": [str,...], // 基于 KG 状态推测的潜在冲突（如：跑道Z 已被占用）；最多5条；若无则 []\n'
+            '  "evidence": [str,...],            // (可缺省) 支撑片段：KG 三元组或节点状态，如 "飞机A001 -[占用]-> 跑道Z"；可空\n'
+            '  "notes": ""                  // 当 potential_conflicts 为空填 "none"，否则填空字符串\n'
             "}\n"
-            "步骤要求：\n"
-            "1. 抽取实体：仅事件文本出现的资源，不做语义合并，不虚构。\n"
-            "2. 规则匹配：不得复制整段原文，不得虚构未在规则文档/域知识中出现的要点；务必去重。\n"
-            '3. 冲突列举：仅在 KG 中存在占用/互斥/依赖未满足/等待时间未满足/设备服务范围不足/时序违法 时列出；否则 potential_conflicts=[] notes="none"。\n'
-            "严格限制：\n"
-            "- 不输出最终 ‘合规/冲突’ 判定；仅做分解。\n"
-            "- 不生成除上述字段外的任何键；字段类型固定为数组或字符串。\n"
-            "- 不在 JSON 外输出解释、示例、分析。\n"
-            "- 不幻觉：KG 未提供证据的冲突不要编造。\n"
-            "- 所有数组元素为 UTF-8 可解析的单行字符串，不含制表符。\n"
-            "只输出合法 JSON，可被 Python json.loads() 解析。"
+            "操作步骤提示（不要输出这些步骤本身）：\n"
+            "1. 抽取实体：仅使用事件文本中出现的名词，不合并不臆造。\n"
+            "2. 匹配规则：提炼短句，不粘贴整段原文，不生成训练外条目。\n"
+            "3. 列举潜在冲突：仅在 KG 提示存在占用/互斥/依赖未满足/等待未达/范围不足/时序违法时填写；否则置空。\n"
+            "最终仅按如下三行输出：\n"
+            "JSON_START\n{...}\nJSON_END"
         )
-        parts = [rules_text, kg_text, "【事件】\n" + event_text, instruction]
+        # 将指令置顶，减少模型在阅读上下文后先行复述的可能
+        # 仅保留 instruction + rules_text + 事件文本；不再拼接 kg_text
+        parts = [instruction, rules_text, "【事件】\n" + event_text]
         return "\n\n".join([p for p in parts if p])
 
     def train_rules_lora(
@@ -809,7 +1334,15 @@ class Exp_main(Exp_Basic):
             dtype=_torch_dtype,
         )
 
-        lora_cfg = LoraConfig(  # type: ignore[call-arg]
+        # 动态获取 LoraConfig 以规避静态类型检查在不同版本上的签名差异
+        try:
+            import peft as __peft  # type: ignore
+            _LoraCfgKls = getattr(__peft, "LoraConfig", None)
+        except Exception:
+            _LoraCfgKls = None
+        if _LoraCfgKls is None:
+            raise RuntimeError("需要安装 peft 方可构建 LoRA 配置")
+        lora_cfg = _LoraCfgKls(  # type: ignore[call-arg]
             task_type=TaskType.CAUSAL_LM,
             r=lora_r,
             lora_alpha=lora_alpha,
@@ -880,7 +1413,7 @@ class Exp_main(Exp_Basic):
                 _tok_map, remove_columns=list(samples[0].keys())
             )
 
-        args = TrainingArguments(
+        args = TrainingArguments(  # type: ignore[call-arg]
             output_dir=out_dir,
             per_device_train_batch_size=per_device_train_batch_size,
             gradient_accumulation_steps=int(gradient_accumulation_steps),
@@ -1365,62 +1898,6 @@ class Exp_main(Exp_Basic):
             "backend": "llama-factory:decompose",
         }
 
-    def generate_with_vllm(
-        self,
-        prompts: List[str],
-        lora_adapter_dir: Optional[str] = None,
-        max_tokens: int = 256,
-        temperature: float = 0.2,
-    ) -> List[str]:
-        """使用 vLLM 进行批量推理。若提供 LoRA 适配器，尝试加载。"""
-        if vllm is None:
-            raise RuntimeError("需要安装 vllm 才能进行推理：pip install vllm")
-        from vllm import LLM, SamplingParams  # type: ignore
-
-        # 缓存或创建 LLM
-        llm = self._vllm_cache.get(self.base_model_dir)
-        if llm is None:
-            _logging.info(f"[CACHE][vLLM][MISS] 初次加载模型: {self.base_model_dir}")
-            llm = LLM(model=self.base_model_dir, trust_remote_code=True)
-            self._vllm_cache[self.base_model_dir] = llm
-        else:
-            _logging.info(f"[CACHE][vLLM][HIT] 复用模型: {self.base_model_dir}")
-        # 尝试加载 LoRA（仅一次）
-        if lora_adapter_dir:
-            key = (self.base_model_dir, lora_adapter_dir)
-            if key not in self._vllm_lora_loaded:
-                try:
-                    loader = getattr(llm, "load_lora_modules", None)
-                    if callable(loader):
-                        loader({"default": lora_adapter_dir})
-                        set_active = getattr(llm, "set_active_lora", None)
-                        if callable(set_active):
-                            set_active("default")
-                        self._vllm_lora_loaded.add(key)
-                        _logging.info(
-                            f"[CACHE][vLLM] LoRA 加载成功: {lora_adapter_dir}"
-                        )
-                    else:
-                        _logging.info(
-                            "[vLLM] 当前版本不支持动态加载 LoRA，忽略适配器。"
-                        )
-                except Exception as e:  # noqa: BLE001
-                    _logging.info(f"[vLLM] 加载 LoRA 失败，忽略：{e}")
-                    self._vllm_lora_loaded.add(key)  # 标记避免重复尝试
-
-        # 增加 "```" 作为停止符，降低模型输出代码围栏的概率
-        sam = SamplingParams(
-            max_tokens=max_tokens, temperature=temperature, stop=["\n\n【", "```"], n=1
-        )
-        outs = llm.generate(prompts, sam)
-        texts = []
-        for out in outs:
-            if out and out.outputs:
-                texts.append(out.outputs[0].text)
-            else:
-                texts.append("")
-        return texts
-
     def _parse_judge_output(self, text: str) -> dict:
         """解析判定输出，提取合规标签/JSON。
 
@@ -1463,7 +1940,35 @@ class Exp_main(Exp_Basic):
                             break
             return last_obj
 
-        obj = _scan_last_json(s)
+        # 优先解析 JSON_START/JSON_END 之间的内容
+        m = _re.search(r"JSON_START\s*(\{[\s\S]*?\})\s*JSON_END", s)
+        if m:
+            try:
+                obj = _json.loads(m.group(1))
+            except Exception:
+                obj = None
+        else:
+            obj = _scan_last_json(s)
+        # 0) 新版（任务1）：两类顶层结构兼容：
+        #   A) 评分示例结构：{"time":..., "时空信息01":{...}, "时空信息02":{...}, ..., "判定":..., "reason":[], "suggest":...}
+        #   B) 我们早期结构：{"时空信息": [...], "判定": "合规|冲突", "依据": [...], "建议": "..."}
+        if isinstance(obj, dict) and ("判定" in obj or "时空信息" in obj or any(isinstance(k, str) and k.startswith("时空信息") for k in obj.keys())):
+            try:
+                comp_cn = str(obj.get("判定", "")).strip()
+                if comp_cn in ("合规", "冲突"):
+                    res["parsed"] = True
+                    res["compliance"] = comp_cn
+                    rs = obj.get("依据", [])
+                    if not isinstance(rs, list):
+                        # 兼容英文键 reason
+                        rs = obj.get("reason", [])
+                    if isinstance(rs, str):
+                        rs = [rs] if rs.strip() else []
+                    if isinstance(rs, list):
+                        res["reasons_len"] = len(rs)
+                    return res
+            except Exception:
+                pass
         # 1) 兼容旧版：平面 JSON，包含全局 compliance
         if isinstance(obj, dict):
             comp = str(obj.get("compliance", "")).strip()
@@ -1474,8 +1979,8 @@ class Exp_main(Exp_Basic):
                 if isinstance(rs, list):
                     res["reasons_len"] = len(rs)
                 return res
-            # 2) 新版：按时刻聚合的对象（含 time 与 多个“时空信息xx”）
-            # 统计所有“时空信息xx”中的合规与依据条数
+            # 2) 新版：按时刻聚合的对象（含 time 与 多个“时空信息xx”）；若无顶层判定，则通过子项推断
+            # 统计所有“时空信息xx”中的合规与依据条数（若子结构也带有 compliance/reasons）
             try:
                 if "time" in obj:
                     any_conflict = False
@@ -1575,128 +2080,155 @@ class Exp_main(Exp_Basic):
         except Exception:
             pass
 
-    def _generate_text(
+    def _build_minimal_judge_json(self, event_text: str, kg_check: Optional[dict] = None) -> dict:
+        """在 LLM 输出不可解析时构造一个最小可用的判定 JSON（降级兜底）。
+
+        结构：{"时空信息": [], "判定": "合规|冲突", "依据": [..<=3], "建议": "..."}
+        - 时空信息为空数组（仅兜底，不做文本抽取以避免二次幻觉）
+        - 判定/依据 来自 KG 检查（若可用），否则判定为合规、依据为空
+        - 建议：冲突则给出通用操作建议，合规则“无”
+        """
+        reasons: list[str] = []
+        label = "合规"
+        if isinstance(kg_check, dict):
+            rs = kg_check.get("reasons", []) or []
+            if isinstance(rs, list):
+                reasons = [str(x) for x in rs][:3]
+            if len(reasons) > 0:
+                label = "冲突"
+        advice = "无" if label == "合规" else "调整资源或等待释放后再执行"
+        # 为对齐评分示例，同时输出中文与英文键（reason/suggest）以增强兼容性
+        return {
+            "time": "",
+            "时空信息01": {},
+            "判定": label,
+            "依据": reasons,
+            "建议": advice,
+            "reason": reasons,
+            "suggest": advice,
+        }
+
+    def _generate_with_handle(
         self,
-        model_dir: str,
+        model_key: str,
         prompts: List[str],
         *,
-        lora_adapter_dir: Optional[str],
-        use_vllm: bool,
         max_tokens: int = 256,
-        temperature: float = 0.2,
+        temperature: float = 0.0,
+        timeout_sec: Optional[float] = None,
     ) -> List[str]:
-        """通用生成器：优先 vLLM，其次 Transformers。"""
-        outs: Optional[List[str]] = None
-        if use_vllm:
-            try:
-                # 临时切换 base_model_dir
-                orig = self.base_model_dir
-                try:
-                    self.base_model_dir = model_dir
-                    outs = self.generate_with_vllm(
-                        prompts, lora_adapter_dir=lora_adapter_dir
-                    )
-                finally:
-                    self.base_model_dir = orig
-            except Exception as e:  # noqa: BLE001
-                _logging.info(
-                    f"[vLLM] 小LLM推理不可用或失败，自动回退 transformers：{e}"
-                )
-                outs = None
-        if outs is None:
-            if transformers is None:
-                raise RuntimeError("需要安装 transformers 或 vllm 进行推理")
-            from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
-            # FIXME: 在加载3.5B时失败，先尝试加载0.6b验证是否是
-            # 缓存键
-            key = (model_dir, lora_adapter_dir or None)
-            cached = self._hf_cache.get(key)
-            try:
-                import torch  # type: ignore
+        """使用已缓存的模型句柄执行批量生成。"""
+        if not isinstance(prompts, list):
+            raise TypeError("prompts 必须为 list[str]")
+        if not prompts:
+            return []
 
-                device_str = "cuda" if torch.cuda.is_available() else "cpu"
+        if not getattr(self, "_models_ready", False):
+            self._build_model()
+
+        handle = self._model_handles.get(model_key)
+        if not handle or handle.get("model") is None or handle.get("tokenizer") is None:
+            raise RuntimeError(f"模型 {model_key} 尚未初始化")
+
+        tok = handle["tokenizer"]
+        model = handle["model"]
+        device = handle.get("device")
+
+        try:
+            import torch  # type: ignore
+        except Exception as exc:  # pragma: no cover - torch 为强依赖
+            raise RuntimeError("需要安装 torch 才能执行推理") from exc
+
+        if device is None:
+            try:
+                device = next(model.parameters()).device
             except Exception:
-                device_str = "cpu"
-            if cached is None:
-                _logging.debug(
-                    f"[CACHE][HF][MISS] 加载模型: {model_dir} lora={lora_adapter_dir}"
-                )
-                tok = AutoTokenizer.from_pretrained(
-                    model_dir, trust_remote_code=True, use_fast=False
-                )
-                if tok.pad_token is None:
-                    tok.pad_token = tok.eos_token
-                mdl = AutoModelForCausalLM.from_pretrained(
-                    model_dir, trust_remote_code=True
-                )
-                try:
-                    if device_str == "cuda":
-                        mdl = getattr(mdl.__class__, "cuda")(mdl)
-                    else:
-                        mdl = getattr(mdl.__class__, "cpu")(mdl)
-                except Exception:
-                    pass
-                if lora_adapter_dir and (key not in self._lora_missing):
-                    try:
-                        from peft import PeftModel  # type: ignore
+                device = torch.device("cpu")
 
-                        mdl = PeftModel.from_pretrained(mdl, lora_adapter_dir)
-                        try:
-                            if device_str == "cuda":
-                                mdl = getattr(mdl.__class__, "cuda")(mdl)
-                            else:
-                                mdl = getattr(mdl.__class__, "cpu")(mdl)
-                        except Exception:
-                            pass
-                        _logging.debug(f"[CACHE][HF] LoRA 加载成功: {lora_adapter_dir}")
-                    except Exception as _e:
-                        _logging.warning(
-                            f"[CACHE][HF] LoRA 加载失败，使用基座: {lora_adapter_dir} -> {_e}"
+        if isinstance(device, str):
+            device_obj = torch.device(device)
+        else:
+            device_obj = device
+
+        timeout = (
+            self.generate_timeout_sec if timeout_sec is None else max(0.0, float(timeout_sec))
+        )
+
+        max_new_tokens = max(1, int(max_tokens))
+        if isinstance(device_obj, torch.device) and device_obj.type == "cpu":
+            cpu_cap = max(1, getattr(self, "cpu_max_new_tokens", 64))
+            if max_new_tokens > cpu_cap:
+                _logging.warning(
+                    f"[GEN] CPU 设备生成 {model_key} 时将 max_new_tokens 从 {max_new_tokens} 限制为 {cpu_cap}"
+                )
+                max_new_tokens = cpu_cap
+
+        do_sample = temperature is not None and float(temperature) > 0.0
+        gen_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": tok.pad_token_id,
+            "eos_token_id": tok.eos_token_id,
+        }
+        if do_sample:
+            gen_kwargs["temperature"] = float(temperature)
+
+        stopping_builder = None
+        if timeout > 0:
+            try:
+                from transformers import StoppingCriteria, StoppingCriteriaList  # type: ignore
+
+                class _TimeoutStopping(StoppingCriteria):
+                    def __init__(self, limit: float) -> None:
+                        self._limit = float(limit)
+                        self._start = _time.monotonic()
+
+                    def __call__(self, input_ids, scores, **kwargs):  # type: ignore[override]
+                        return (_time.monotonic() - self._start) >= self._limit
+
+                def _build_timeout_list() -> "StoppingCriteriaList":
+                    return StoppingCriteriaList([_TimeoutStopping(timeout)])
+
+                stopping_builder = _build_timeout_list
+            except Exception:
+                gen_kwargs["max_time"] = timeout
+
+        outputs: List[str] = []
+
+        with torch.no_grad():
+            for prompt in prompts:
+                text = prompt if isinstance(prompt, str) else str(prompt)
+                inputs = tok(text, return_tensors="pt")
+                try:
+                    inputs = inputs.to(device_obj)
+                except Exception:
+                    inputs = {k: v.to(device_obj) for k, v in inputs.items()}
+
+                start_ts = _time.monotonic()
+                local_stopping = stopping_builder() if stopping_builder else None
+                try:
+                    if local_stopping is not None:
+                        generated = model.generate(
+                            **inputs, **gen_kwargs, stopping_criteria=local_stopping
                         )
-                        self._lora_missing.add(key)
-                self._hf_cache[key] = (tok, mdl)
-            else:
-                tok, mdl = cached
-                _logging.debug(
-                    f"[CACHE][HF][HIT] 复用模型: {model_dir} lora={lora_adapter_dir}"
+                    else:
+                        generated = model.generate(**inputs, **gen_kwargs)
+                except Exception as err:  # noqa: BLE001
+                    _logging.error(f"[GEN] {model_key} 生成失败: {err}")
+                    raise
+                duration = _time.monotonic() - start_ts
+                if timeout > 0 and duration > timeout + 1:
+                    _logging.warning(
+                        f"[GEN] {model_key} 生成耗时 {duration:.1f}s，超过阈值 {timeout:.1f}s，输出可能被截断"
+                    )
+
+                prompt_len = inputs["input_ids"].shape[1]
+                seq = generated[0].detach().cpu()
+                outputs.append(
+                    tok.decode(seq[prompt_len:], skip_special_tokens=True)
                 )
-            outs = []
-            # 推理（禁用梯度）
-            try:
-                import torch  # type: ignore
 
-                inference_ctx = getattr(torch, "inference_mode", None)
-            except Exception:
-                inference_ctx = None
-            ctx_mgr = inference_ctx() if callable(inference_ctx) else None
-            try:
-                if ctx_mgr is None:
-                    import torch  # type: ignore
-
-                    torch.set_grad_enabled(False)
-                for p in prompts:
-                    ids = tok(p, return_tensors="pt")
-                    try:
-                        if device_str == "cuda":
-                            ids = {k: v.cuda() for k, v in ids.items()}
-                    except Exception:
-                        pass
-                    gen = mdl.generate(
-                        **ids, max_new_tokens=max_tokens, do_sample=False
-                    )
-                    out = tok.decode(
-                        gen[0][ids["input_ids"].shape[1] :], skip_special_tokens=True
-                    )
-                    outs.append(out)
-            finally:
-                try:
-                    if ctx_mgr is None:
-                        import torch  # type: ignore
-
-                        torch.set_grad_enabled(True)
-                except Exception:
-                    pass
-        return outs
+        return outputs
 
     # ====== 新增：预热与卸载接口 ======
     def warmup_models(
@@ -1704,80 +2236,97 @@ class Exp_main(Exp_Basic):
         *,
         judge: bool = True,
         decomp: bool = True,
-        lora_adapter_dir: Optional[str] = None,
-        use_vllm: bool = True,
         order: str = "judge_first",
         timeout_sec: int = 300,
     ) -> None:
-        """预加载常用模型，减少首次请求等待时间。
+        """预加载常用模型，减少首次请求等待时间。"""
+        _logging.info("[WARMUP] 触发模型预热")
 
-        参数:
-          judge: 是否预热主判定模型(base_model_dir)
-          decomp: 是否预热分解器模型(decomp_base_model_dir)
-          lora_adapter_dir: 主判定LoRA目录（若有）
-          use_vllm: 预热时是否也尝试 vLLM 路径
-          order: judge_first | decomp_first 指定先后顺序
-          timeout_sec: 单模型最长预热秒数，超时放弃该模型
-        """
-        import time as _t
+        try:
+            self._build_model()
+        except Exception as exc:  # noqa: BLE001
+            _logging.warning(f"[WARMUP] 模型加载失败: {exc}")
+            return
 
-        models_plan = []
+        plan: List[str] = []
         if order == "decomp_first":
-            if decomp and (self.decomp_base_model_dir != self.base_model_dir):
-                models_plan.append(("decomp", self.decomp_base_model_dir, None))
+            if decomp:
+                plan.append("decomp")
             if judge:
-                models_plan.append(("judge", self.base_model_dir, lora_adapter_dir))
-        else:  # judge_first
+                plan.append("judge")
+        else:
             if judge:
-                models_plan.append(("judge", self.base_model_dir, lora_adapter_dir))
-            if decomp and (self.decomp_base_model_dir != self.base_model_dir):
-                models_plan.append(("decomp", self.decomp_base_model_dir, None))
+                plan.append("judge")
+            if decomp:
+                plan.append("decomp")
 
-        for tag, mdir, lora in models_plan:
-            start = _t.time()
+        for key in plan:
             try:
-                _logging.info(f"[WARMUP] 开始预热 {tag} model_dir={mdir} lora={lora}")
-                # 超时控制：循环里做最小生成；若超时则跳过
-                while True:
-                    elapsed = _t.time() - start
-                    if elapsed > timeout_sec:
-                        _logging.warning(f"[WARMUP] 超时跳过 {tag} ({timeout_sec}s)")
-                        break
-                    # 单次最小生成即可触发内部缓存初始化
-                    self._generate_text(
-                        mdir,
-                        ["warmup"],
-                        lora_adapter_dir=lora,
-                        use_vllm=use_vllm,
-                        max_tokens=1,
-                        temperature=0.0,
-                    )
-                    break  # 成功一次就退出
-                _logging.info(f"[WARMUP] 完成 {tag} 耗时={_t.time()-start:.2f}s")
-            except Exception as e:  # noqa: BLE001
-                _logging.warning(f"[WARMUP] 失败 {tag}: {e}")
-        _logging.info("[WARMUP] 全部预热过程结束。")
+                handle = self._model_handles.get(key, {})
+                if key == "decomp" and not handle.get("model"):
+                    _logging.info("[WARMUP] 跳过 decomp（未加载分解模型）")
+                    continue
+                self._generate_with_handle(
+                    key,
+                    ["warmup"],
+                    max_tokens=1,
+                    temperature=0.0,
+                    timeout_sec=min(float(timeout_sec), self.generate_timeout_sec),
+                )
+                _logging.info(f"[WARMUP] {key} 完成预热")
+            except Exception as exc:  # noqa: BLE001
+                _logging.warning(f"[WARMUP] {key} 预热失败: {exc}")
+
+        _logging.info("[WARMUP] 预热流程结束")
 
     def unload_model(
         self, model_dir: str, lora_adapter_dir: Optional[str] = None
     ) -> None:
-        """主动卸载指定 HF 模型，释放显存（vLLM 暂不主动卸载）。"""
-        key = (model_dir, lora_adapter_dir or None)
-        obj = self._hf_cache.pop(key, None)
-        if obj:
-            _, mdl = obj
-            try:
-                import torch  # type: ignore
+        """释放已经缓存的模型句柄。"""
+        if not getattr(self, "_models_ready", False):
+            _logging.info("[UNLOAD] 当前没有已加载的模型")
+            return
 
-                del mdl
+        remove_keys = []
+        for key, handle in list(self._model_handles.items()):
+            if handle.get("model_dir") == model_dir and handle.get("lora_dir") == lora_adapter_dir:
+                remove_keys.append(key)
+
+        if not remove_keys:
+            _logging.info(
+                f"[UNLOAD] 未找到匹配模型: {model_dir} lora={lora_adapter_dir}"
+            )
+            return
+
+        try:
+            import torch  # type: ignore
+        except Exception:
+            torch = None  # type: ignore
+
+        for key in remove_keys:
+            handle = self._model_handles.pop(key, None)
+            if handle and handle.get("model") is not None:
+                mdl = handle.get("model")
+                try:
+                    del mdl
+                except Exception:
+                    pass
+        if torch is not None and hasattr(torch, "cuda"):
+            try:
                 torch.cuda.empty_cache()
             except Exception:
                 pass
-            _logging.info(f"[UNLOAD] 已卸载模型: {model_dir} lora={lora_adapter_dir}")
-        else:
-            _logging.info(
-                f"[UNLOAD] 未找到缓存模型: {model_dir} lora={lora_adapter_dir}"
-            )
+
+        if not self._model_handles:
+            self._models_ready = False
+            self._judge_model = None
+            self._judge_tokenizer = None
+            self._judge_device = None
+            self._decomp_model = None
+            self._decomp_tokenizer = None
+            self._decomp_device = None
+
+        _logging.info(f"[UNLOAD] 已卸载模型: {remove_keys}")
 
     # 删除单条 judge 接口，统一通过 stream_judge_conflicts/Exp_main.run 路由
     def _marl_rectify_and_update_kg(
@@ -1869,7 +2418,6 @@ class Exp_main(Exp_Basic):
             model_dir=_model_dir,
             result_dir=_result_dir,
             result_name=rname,
-            load_model=True,
             learn=False,
             cuda=bool(getattr(self.args, "marl_cuda", True)),
             replay_dir="",
@@ -1927,8 +2475,6 @@ class Exp_main(Exp_Basic):
         events_iter,
         focus_entities: Optional[List[str]] = None,
         rules_md_path: Optional[str] = None,
-        lora_adapter_dir: Optional[str] = None,
-        use_vllm: bool = True,
         batch_size: int = 4,
         simple_output: bool = False,
         show_decomposition: bool = False,
@@ -1939,15 +2485,21 @@ class Exp_main(Exp_Basic):
         - 每批最多 batch_size 条，生成对应输出后立即 yield，适合持续到来的实时日志。
         - 返回迭代器：每次 yield (event_text, output_str)
         """
+        if not getattr(self, "_models_ready", False):
+            self._build_model()
+
+        judge_handle = self._model_handles.get("judge") if hasattr(self, "_model_handles") else None
+        if not judge_handle or judge_handle.get("model") is None:
+            raise RuntimeError("判定模型未初始化，无法执行流式判定")
+
+        decomp_handle = self._model_handles.get("decomp") if hasattr(self, "_model_handles") else None
+        decomp_available = bool(decomp_handle and decomp_handle.get("model"))
+
         # 规则提示一次构建，复用
         rules_text = self.build_rules_prompt(rules_md_path) if rules_md_path else ""
         # 小LLM分解器配置
         use_decomposer = bool(getattr(self.args, "enable_decomposer", False))
-        decomp_adapter = getattr(self.args, "decomp_lora_adapter_dir", None)
-        decomp_model_dir = getattr(
-            self.args, "decomp_base_model_dir", self.decomp_base_model_dir
-        )
-        
+
         _kg_vis_dir = self.kg_vis_dir
         _kg_vis_idx = self.kg_vis_idx
 
@@ -1989,17 +2541,16 @@ class Exp_main(Exp_Basic):
                 kg_text = "【KG状态】\n(离线模式，未加载图谱)"
             # 可选：先调用小LLM做问题分解
             decomp_text = None
-            if use_decomposer:
+            if use_decomposer and decomp_available:
                 # TODO: before training, using base model as default
                 try:
                     d_prompt = self._format_decompose_prompt(ev, rules_text, kg_text)
-                    d_outs = self._generate_text(
-                        decomp_model_dir,
+                    d_outs = self._generate_with_handle(
+                        "decomp",
                         [d_prompt],
-                        lora_adapter_dir=decomp_adapter,
-                        use_vllm=use_vllm,
-                        max_tokens=256,
+                        max_tokens=1024,
                         temperature=0.0,
+                        timeout_sec=self.generate_timeout_sec,
                     )
                     decomp_text = (d_outs[0] if d_outs else "") or ""
                     # 保存小模型输出到 JSONL
@@ -2021,6 +2572,11 @@ class Exp_main(Exp_Basic):
                         pass
                 except Exception as _e:
                     decomp_text = None
+            elif use_decomposer and not decomp_available:
+                try:
+                    _logging.warning("[DECOMP] 已启用分解器但未加载分解模型，跳过该步骤")
+                except Exception:
+                    pass
             # 可选：打印分解器输出，便于人工复核
             # 按要求不输出具体内容
             if show_decomposition and decomp_text:
@@ -2030,47 +2586,49 @@ class Exp_main(Exp_Basic):
                     pass
 
             # 主提示：附加分解结果（若有）
-            extra = ("\n\n【问题分解】\n" + decomp_text) if decomp_text else ""
+            # 注：为提高主模型对最终 JSON 结构的遵循度，不再将分解器输出注入主提示，避免多余JSON干扰。
             prompt = self._format_conflict_prompt_with_mode(
-                ev, rules_text, kg_text + extra, simple=simple_output
+                ev,
+                rules_text,
+                kg_text,
+                simple=simple_output,
+                conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
             )
             batch_events.append(ev)
             batch_prompts.append(prompt)
 
             if len(batch_events) >= max(1, int(batch_size)):
-                # 推理
-                outs = None
-                if use_vllm:
+                outs: Optional[List[str]] = None
+                try:
+                    outs = self._generate_with_handle(
+                        "judge",
+                        batch_prompts,
+                        max_tokens=1024,
+                        temperature=0.0,
+                        timeout_sec=self.generate_timeout_sec,
+                    )
+                except (RuntimeError, OSError, MemoryError) as err:
                     try:
-                        outs = self.generate_with_vllm(
-                            batch_prompts,
-                            lora_adapter_dir=lora_adapter_dir,
-                            max_tokens=220,
-                            temperature=0.0,
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        _logging.info(
-                            f"[vLLM] 推理不可用或失败，自动回退到 transformers：{e}"
-                        )
-                        outs = None
+                        _logging.warning(f"[JUDGE] 主模型推理失败，尝试 simple 降级：{err}")
+                    except Exception:
+                        pass
+                    outs = None
+
                 if outs is None:
-                    # 回退：使用统一的 _generate_text HF 缓存路径（避免每批重复加载与多次 device 迁移）
-                    # 若触发 OOM/1455，再执行小模型 simple 降级。
                     try:
-                        outs = self._generate_text(
-                            self.base_model_dir,
-                            batch_prompts,
-                            lora_adapter_dir=lora_adapter_dir,
-                            use_vllm=False,  # 已尝试 vLLM，此处强制 HF
-                            max_tokens=1024,
-                            temperature=0.0,
-                        )
-                    except (OSError, MemoryError):
-                        # 降级：使用小模型 + simple 提示，避免占用内存/页面文件过高
-                        try:
-                            retry_prompts = []
+                        if self.no_simple_fallback:
+                            # 不进行 simple 降级；直接按原始完整提示重试一次，保持较大输出上限
+                            outs = self._generate_with_handle(
+                                "judge",
+                                batch_prompts,
+                                max_tokens=int(self.retry_max_new_tokens),
+                                temperature=0.0,
+                                timeout_sec=self.generate_timeout_sec,
+                            )
+                        else:
+                            # simple 降级（保持原逻辑，但 max_tokens 改为可配置上限）
+                            retry_prompts: List[str] = []
                             for ev_i in batch_events:
-                                # 构造精简上下文
                                 try:
                                     _auto = []
                                     try:
@@ -2093,7 +2651,9 @@ class Exp_main(Exp_Basic):
                                         _focus = None
                                     if self.kg_service is not None:
                                         try:
-                                            _kg_txt = self.kg_service.get_context_text(focus_entities=_focus, limit=200)
+                                            _kg_txt = self.kg_service.get_context_text(
+                                                focus_entities=_focus, limit=200
+                                            )
                                         except Exception:
                                             _kg_txt = "【KG状态】\n(离线模式，服务异常)"
                                     else:
@@ -2102,19 +2662,23 @@ class Exp_main(Exp_Basic):
                                     _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
                                 retry_prompts.append(
                                     self._format_conflict_prompt_with_mode(
-                                        ev_i, rules_text, _kg_txt, simple=True
+                                        ev_i,
+                                        rules_text,
+                                        _kg_txt,
+                                        simple=True,
+                                        conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
                                     )
                                 )
-                            outs = self._generate_text(
-                                self.decomp_base_model_dir,
+                            fallback_key = "decomp" if decomp_available else "judge"
+                            outs = self._generate_with_handle(
+                                fallback_key,
                                 retry_prompts,
-                                lora_adapter_dir=None,
-                                use_vllm=use_vllm,
-                                max_tokens=16,
+                                max_tokens=int(self.retry_max_new_tokens),
                                 temperature=0.0,
+                                timeout_sec=self.generate_timeout_sec,
                             )
-                        except Exception:
-                            outs = [""] * len(batch_prompts)
+                    except Exception:
+                        outs = [""] * len(batch_prompts)
                 # 若非 simple_output，则对无法解析的样本进行一次降级重试（simple 模式，仅输出“合规/冲突”）
                 if not simple_output:
                     try:
@@ -2125,58 +2689,74 @@ class Exp_main(Exp_Basic):
                             if not bool(p.get("parsed"))
                         ]
                         if retry_idx:
-                            retry_prompts: List[str] = []
-                            for i in retry_idx:
-                                ev_i = batch_events[i]
-                                # 复用当前KG快速构造 simple 提示
+                            if self.no_simple_fallback:
+                                # 使用原完整提示对失败样本重试
+                                retry_prompts = [batch_prompts[i] for i in retry_idx]
                                 try:
-                                    # 重新提取一次关注实体（与上文一致逻辑）
-                                    _auto: List[str] = []
-                                    try:
-                                        _tr = _extract_triples(ev_i)
-                                        for s, p, o in _tr:
-                                            for t in (s, o):
-                                                t = str(t).strip()
-                                                if t:
-                                                    _auto.append(t)
-                                    except Exception:
-                                        pass
-                                    if _auto:
-                                        _seen = set()
-                                        _focus = []
-                                        for x in _auto:
-                                            if x and x not in _seen:
-                                                _focus.append(x)
-                                                _seen.add(x)
-                                    else:
-                                        _focus = None
-                                    if self.kg_service is not None:
-                                        try:
-                                            _kg_txt = self.kg_service.get_context_text(focus_entities=_focus, limit=200)
-                                        except Exception:
-                                            _kg_txt = "【KG状态】\n(离线模式，服务异常)"
-                                    else:
-                                        _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
-                                except Exception:
-                                    _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
-                                retry_prompts.append(
-                                    self._format_conflict_prompt_with_mode(
-                                        ev_i, rules_text, _kg_txt, simple=True
+                                    re_outs = self._generate_with_handle(
+                                        "judge",
+                                        retry_prompts,
+                                        max_tokens=int(self.retry_max_new_tokens),
+                                        temperature=0.0,
+                                        timeout_sec=self.generate_timeout_sec,
                                     )
-                                )
-                            # 执行一次小步重试
-                            try:
-                                # simple 重试一律使用小模型，避免 4B 在 Windows 上触发内存问题
-                                re_outs = self._generate_text(
-                                    self.decomp_base_model_dir,
-                                    retry_prompts,
-                                    lora_adapter_dir=None,
-                                    use_vllm=use_vllm,
-                                    max_tokens=16,
-                                    temperature=0.0,
-                                )
-                            except Exception:
-                                re_outs = [""] * len(retry_prompts)
+                                except Exception:
+                                    re_outs = [""] * len(retry_prompts)
+                            else:
+                                retry_prompts: List[str] = []
+                                for i in retry_idx:
+                                    ev_i = batch_events[i]
+                                    # 复用当前KG快速构造 simple 提示
+                                    try:
+                                        _auto: List[str] = []
+                                        try:
+                                            _tr = _extract_triples(ev_i)
+                                            for s, p, o in _tr:
+                                                for t in (s, o):
+                                                    t = str(t).strip()
+                                                    if t:
+                                                        _auto.append(t)
+                                        except Exception:
+                                            pass
+                                        if _auto:
+                                            _seen = set()
+                                            _focus = []
+                                            for x in _auto:
+                                                if x and x not in _seen:
+                                                    _focus.append(x)
+                                                    _seen.add(x)
+                                        else:
+                                            _focus = None
+                                        if self.kg_service is not None:
+                                            try:
+                                                _kg_txt = self.kg_service.get_context_text(focus_entities=_focus, limit=200)
+                                            except Exception:
+                                                _kg_txt = "【KG状态】\n(离线模式，服务异常)"
+                                        else:
+                                            _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                    except Exception:
+                                        _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                    retry_prompts.append(
+                                        self._format_conflict_prompt_with_mode(
+                                            ev_i,
+                                            rules_text,
+                                            _kg_txt,
+                                            simple=True,
+                                            conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                                        )
+                                    )
+                                # 执行一次小步重试（simple 提示，但使用可配置上限）
+                                try:
+                                    fallback_key = "decomp" if decomp_available else "judge"
+                                    re_outs = self._generate_with_handle(
+                                        fallback_key,
+                                        retry_prompts,
+                                        max_tokens=int(self.retry_max_new_tokens),
+                                        temperature=0.0,
+                                        timeout_sec=self.generate_timeout_sec,
+                                    )
+                                except Exception:
+                                    re_outs = [""] * len(retry_prompts)
                             for j, idx in enumerate(retry_idx):
                                 if (
                                     isinstance(re_outs, list)
@@ -2220,10 +2800,23 @@ class Exp_main(Exp_Basic):
                             "compliance": parsed.get("compliance"),
                             "reasons_len": parsed.get("reasons_len"),
                         }
-                        try:
-                            payload["output"] = __json.loads(o) if isinstance(o, str) else o
-                        except Exception:
-                            payload["output_raw"] = o
+                        # 若解析失败，尝试使用 KG 结果构造最小 JSON 兜底
+                        if not bool(parsed.get("parsed")):
+                            _kg_chk = None
+                            if self.kg_service is not None:
+                                try:
+                                    _kg_chk = self.kg_service.check_event_conflicts(e) or {}
+                                except Exception:
+                                    _kg_chk = None
+                            _fallback = self._build_minimal_judge_json(e, _kg_chk)
+                            payload["output"] = _fallback
+                            payload["compliance"] = _fallback.get("判定")
+                            payload["reasons_len"] = len(_fallback.get("依据", []) or [])
+                        else:
+                            try:
+                                payload["output"] = __json.loads(o) if isinstance(o, str) else o
+                            except Exception:
+                                payload["output_raw"] = o
                         self._append_jsonl(self._judge_out_file, payload)
                     except Exception:
                         pass
@@ -2282,7 +2875,7 @@ class Exp_main(Exp_Basic):
 
                             _kg_vis_idx += 1
                             ts = int(__t.time())
-                            out_png = os.path.join(
+                            out_png = _os.path.join(
                                 _kg_vis_dir, f"kg_{ts}_{_kg_vis_idx:04d}.png"
                             )
                             self.kg_service.export_png(out_png)
@@ -2293,95 +2886,38 @@ class Exp_main(Exp_Basic):
 
         # 处理尾批
         if batch_events:
-            outs = None
-            if use_vllm:
+            outs: Optional[List[str]] = None
+            try:
+                outs = self._generate_with_handle(
+                    "judge",
+                    batch_prompts,
+                    max_tokens=1024,
+                    temperature=0.0,
+                    timeout_sec=self.generate_timeout_sec,
+                )
+            except (RuntimeError, OSError, MemoryError) as err:
                 try:
-                    outs = self.generate_with_vllm(
-                        batch_prompts,
-                        lora_adapter_dir=lora_adapter_dir,
-                        max_tokens=220,
-                        temperature=0.0,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    _logging.info(
-                        f"[vLLM] 推理不可用或失败，自动回退到 transformers：{e}"
-                    )
-                    outs = None
+                    _logging.warning(f"[JUDGE] 主模型推理失败，尝试 simple 降级：{err}")
+                except Exception:
+                    pass
+                outs = None
+
             if outs is None:
                 try:
-                    # 回退：统一使用 _generate_text 的 HF 缓存推理
-                    outs = self._generate_text(
-                        self.base_model_dir,
-                        batch_prompts,
-                        lora_adapter_dir=lora_adapter_dir,
-                        use_vllm=False,
-                        max_tokens=220,
-                        temperature=0.0,
-                    )
-                except (OSError, MemoryError):
-                    # 降级：使用小模型 + simple 提示
-                    try:
-                        retry_prompts = []
+                    if self.no_simple_fallback:
+                        # 不进行 simple 降级；直接按原始完整提示重试一次
+                        outs = self._generate_with_handle(
+                            "judge",
+                            batch_prompts,
+                            max_tokens=int(self.retry_max_new_tokens),
+                            temperature=0.0,
+                            timeout_sec=self.generate_timeout_sec,
+                        )
+                    else:
+                        retry_prompts: List[str] = []
                         for ev_i in batch_events:
                             try:
                                 _auto = []
-                                try:
-                                    _tr = _extract_triples(ev_i)
-                                    for s, p, o in _tr:
-                                        for t in (s, o):
-                                            t = str(t).strip()
-                                            if t:
-                                                _auto.append(t)
-                                except Exception:
-                                    pass
-                                if _auto:
-                                    _seen = set()
-                                    _focus = []
-                                    for x in _auto:
-                                        if x and x not in _seen:
-                                            _focus.append(x)
-                                            _seen.add(x)
-                                else:
-                                    _focus = None
-                                if self.kg_service is not None:
-                                    try:
-                                        _kg_txt = self.kg_service.get_context_text(focus_entities=_focus, limit=200)
-                                    except Exception:
-                                        _kg_txt = "【KG状态】\n(离线模式，服务异常)"
-                                else:
-                                    _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
-                            except Exception:
-                                _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
-                            retry_prompts.append(
-                                self._format_conflict_prompt_with_mode(
-                                    ev_i, rules_text, _kg_txt, simple=True
-                                )
-                            )
-                        outs = self._generate_text(
-                            self.decomp_base_model_dir,
-                            retry_prompts,
-                            lora_adapter_dir=None,
-                            use_vllm=use_vllm,
-                            max_tokens=16,
-                            temperature=0.0,
-                        )
-                    except Exception:
-                        outs = [""] * len(batch_prompts)
-            # 若非 simple_output，则对无法解析的样本进行一次降级重试（simple 模式，仅输出“合规/冲突”）
-            if not simple_output:
-                try:
-                    parsed_list = [self._parse_judge_output(o) for o in outs]
-                    retry_idx = [
-                        i
-                        for i, p in enumerate(parsed_list)
-                        if not bool(p.get("parsed"))
-                    ]
-                    if retry_idx:
-                        retry_prompts: List[str] = []
-                        for i in retry_idx:
-                            ev_i = batch_events[i]
-                            try:
-                                _auto: List[str] = []
                                 try:
                                     _tr = _extract_triples(ev_i)
                                     for s, p, o in _tr:
@@ -2413,20 +2949,100 @@ class Exp_main(Exp_Basic):
                                 _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
                             retry_prompts.append(
                                 self._format_conflict_prompt_with_mode(
-                                    ev_i, rules_text, _kg_txt, simple=True
+                                    ev_i,
+                                    rules_text,
+                                    _kg_txt,
+                                    simple=True,
+                                    conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
                                 )
                             )
-                        try:
-                            re_outs = self._generate_text(
-                                self.decomp_base_model_dir,
-                                retry_prompts,
-                                lora_adapter_dir=None,
-                                use_vllm=use_vllm,
-                                max_tokens=16,
-                                temperature=0.0,
-                            )
-                        except Exception:
-                            re_outs = [""] * len(retry_prompts)
+                        fallback_key = "decomp" if decomp_available else "judge"
+                        outs = self._generate_with_handle(
+                            fallback_key,
+                            retry_prompts,
+                            max_tokens=int(self.retry_max_new_tokens),
+                            temperature=0.0,
+                            timeout_sec=self.generate_timeout_sec,
+                        )
+                except Exception:
+                    outs = [""] * len(batch_prompts)
+            # 若非 simple_output，则对无法解析的样本进行一次降级重试（simple 模式，仅输出“合规/冲突”）
+            if not simple_output:
+                try:
+                    parsed_list = [self._parse_judge_output(o) for o in outs]
+                    retry_idx = [
+                        i
+                        for i, p in enumerate(parsed_list)
+                        if not bool(p.get("parsed"))
+                    ]
+                    if retry_idx:
+                        if self.no_simple_fallback:
+                            retry_prompts = [batch_prompts[i] for i in retry_idx]
+                            try:
+                                re_outs = self._generate_with_handle(
+                                    "judge",
+                                    retry_prompts,
+                                    max_tokens=int(self.retry_max_new_tokens),
+                                    temperature=0.0,
+                                    timeout_sec=self.generate_timeout_sec,
+                                )
+                            except Exception:
+                                re_outs = [""] * len(retry_prompts)
+                        else:
+                            retry_prompts: List[str] = []
+                            for i in retry_idx:
+                                ev_i = batch_events[i]
+                                try:
+                                    _auto: List[str] = []
+                                    try:
+                                        _tr = _extract_triples(ev_i)
+                                        for s, p, o in _tr:
+                                            for t in (s, o):
+                                                t = str(t).strip()
+                                                if t:
+                                                    _auto.append(t)
+                                    except Exception:
+                                        pass
+                                    if _auto:
+                                        _seen = set()
+                                        _focus = []
+                                        for x in _auto:
+                                            if x and x not in _seen:
+                                                _focus.append(x)
+                                                _seen.add(x)
+                                    else:
+                                        _focus = None
+                                    if self.kg_service is not None:
+                                        try:
+                                            _kg_txt = self.kg_service.get_context_text(
+                                                focus_entities=_focus, limit=200
+                                            )
+                                        except Exception:
+                                            _kg_txt = "【KG状态】\n(离线模式，服务异常)"
+                                    else:
+                                        _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                except Exception:
+                                    _kg_txt = "【KG状态】\n(离线模式，未加载图谱)"
+                                retry_prompts.append(
+                                    self._format_conflict_prompt_with_mode(
+                                        ev_i,
+                                        rules_text,
+                                        _kg_txt,
+                                        simple=True,
+                                        conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                                    )
+                                )
+                            try:
+                                retry_key = "decomp" if decomp_available else "judge"
+                                re_outs = self._generate_with_handle(
+                                    retry_key,
+                                    retry_prompts,
+                                    max_tokens=int(self.retry_max_new_tokens),
+                                    temperature=0.0,
+                                    timeout_sec=self.generate_timeout_sec,
+                                )
+                            except Exception:
+                                re_outs = [""] * len(retry_prompts)
                         for j, idx in enumerate(retry_idx):
                             if (
                                 isinstance(re_outs, list)
@@ -2470,10 +3086,22 @@ class Exp_main(Exp_Basic):
                             "compliance": parsed.get("compliance"),
                             "reasons_len": parsed.get("reasons_len"),
                         }
-                        try:
-                            payload["output"] = __json.loads(o) if isinstance(o, str) else o
-                        except Exception:
-                            payload["output_raw"] = o
+                        if not bool(parsed.get("parsed")):
+                            _kg_chk = None
+                            if self.kg_service is not None:
+                                try:
+                                    _kg_chk = self.kg_service.check_event_conflicts(e) or {}
+                                except Exception:
+                                    _kg_chk = None
+                            _fallback = self._build_minimal_judge_json(e, _kg_chk)
+                            payload["output"] = _fallback
+                            payload["compliance"] = _fallback.get("判定")
+                            payload["reasons_len"] = len(_fallback.get("依据", []) or [])
+                        else:
+                            try:
+                                payload["output"] = __json.loads(o) if isinstance(o, str) else o
+                            except Exception:
+                                payload["output_raw"] = o
                         self._append_jsonl(self._judge_out_file, payload)
                     except Exception:
                         pass
@@ -2539,6 +3167,231 @@ class Exp_main(Exp_Basic):
                     yield (e, o)
         # 更新实例中的可视化计数器，便于后续继续追加
         self.kg_vis_idx = _kg_vis_idx
+
+    # ----------------------------
+    # 任务一结果格式导出
+    # ----------------------------
+    def export_task1_results(self, source_jsonl: Optional[str] = None, out_path: Optional[str] = None) -> Optional[str]:
+        """将判定阶段的 judge JSONL 文件转换为任务一评分规则格式。
+
+        输出为 JSON 数组：每元素至少包含顶层键：time 与若干条信息字段。
+        - 信息字段类别：
+            - 时空信息 01..NN（必有）
+            - 历史信息 01..NN（可选，兼容键名：历史统计01..NN）
+            - 态势感知 01..NN（可选，兼容键名：态势预测01..NN）
+        - 键名带空格，编号两位补零；值为中文描述句，以全角分号结尾。
+        - 若缺失 time，则尝试从子项或记录时间戳 ts 推断。
+        - 对于对象值（而非字符串值）的时空信息，将基于常见键拼装句子并附“对应能力项（…）”。
+        """
+        import json, os, logging, re
+        logger = logging.getLogger("task1_export")
+        src = source_jsonl or getattr(self, "_judge_out_file", None)
+        if not src or not os.path.isfile(src):
+            logger.warning(f"[TASK1] 源文件不存在: {src}")
+            return None
+        out_path = out_path or os.path.join(self.results_out_dir, "task1_result.json")
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+        def _norm_key(k: str) -> str:
+            if not isinstance(k, str):
+                return k
+            # 统一三类键名：时空信息/历史信息(历史统计)/态势感知(态势预测)
+            def _norm_with(prefixes, target_prefix):
+                for p in prefixes:
+                    if k.startswith(p):
+                        num = k[len(p):]
+                        num = re.sub(r"[^0-9]", "", num)
+                        if num:
+                            return f"{target_prefix} {num.zfill(2)}"
+                        return f"{target_prefix} 01"
+                return None
+            hit = (
+                _norm_with(["时空信息 ", "时空信息"], "时空信息") or
+                _norm_with(["历史信息 ", "历史信息", "历史统计 ", "历史统计"], "历史信息") or
+                _norm_with(["态势感知 ", "态势感知", "态势预测 ", "态势预测"], "态势感知")
+            )
+            if hit:
+                return hit
+            return k
+
+        def _build_sentence(obj: dict) -> str:
+            if not isinstance(obj, dict) or not obj:
+                return ""
+            plane_id = obj.get("飞机ID") or obj.get("飞机")
+            op_rel = obj.get("作业关系") or obj.get("作业ID")
+            plane_state = obj.get("飞机状态")
+            speed = obj.get("速度") or obj.get("速率")
+            state_rel = obj.get("状态关系")
+            loc_rel = obj.get("位置关系")
+            gate_id = obj.get("停机位ID")
+            parts = []
+            if plane_id:
+                parts.append(f"飞机 {plane_id}")
+            if op_rel:
+                parts.append(f"正在开展作业，{op_rel}")
+            if plane_state:
+                parts.append(f"处于，{plane_state}")
+            if speed:
+                parts.append(f"（速度{speed}）")
+            handled = {"飞机ID", "飞机", "作业关系", "作业ID", "飞机状态", "速度", "速率", "状态关系", "位置关系", "停机位ID"}
+            for k, v in obj.items():
+                if k in handled:
+                    continue
+                if isinstance(v, (str, int, float)) and str(v):
+                    parts.append(f"{k}{v}")
+            ability_items = []
+            for k in ["飞机ID", "作业关系", "飞机状态", "状态关系", "位置关系", "停机位ID"]:
+                if k in obj and obj.get(k):
+                    ability_items.append(k)
+            seen = set()
+            ability_items = [x for x in ability_items if not (x in seen or seen.add(x))]
+            if ability_items:
+                parts.append(f"对应能力项（{'，'.join(能力项 for 能力项 in ability_items)}）")
+            sentence = "，".join([p for p in parts if p])
+            if sentence and sentence[-1] not in "；。":
+                sentence += "；"
+            return sentence
+
+        results = []
+        with open(src, "r", encoding="utf-8") as f:
+            for ln in f:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    rec = json.loads(ln)
+                except Exception:
+                    continue
+                out_obj = rec.get("output")
+                if not isinstance(out_obj, dict):
+                    # 兼容当前 stream 仅保存 output_raw 的情况：从 output_raw 中提取最后一个 JSON
+                    raw = rec.get("output_raw")
+                    if isinstance(raw, str) and raw.strip():
+                        # === 新增：先进行全角字符与注释的规范化，提升解析率 ===
+                        def _normalize_fullwidth(s: str) -> str:
+                            # 去除行尾注释 (# ...)
+                            import re as _re
+                            s = _re.sub(r"#[^\n]*", "", s)
+                            # 全角括号/引号/冒号替换
+                            trans_map = {
+                                "｛": "{", "｝": "}", "“": '"', "”": '"', "：": ":",
+                            }
+                            # 统一逗号格式：中文逗号保留，不影响 JSON 解析
+                            for k, v in trans_map.items():
+                                s = s.replace(k, v)
+                            # 双层包裹 "{{ ... }}" -> "{ ... }"
+                            s = _re.sub(r"\{\s*\{", "{", s)
+                            s = _re.sub(r"\}\s*\}", "}", s)
+                            return s
+                        raw_norm = _normalize_fullwidth(raw)
+                        # 若用户输出是近似 JSON 但键值全为中文字符，这里尝试快速补逗号/分号处理
+                        # 将可能的 "；" 视为结束标点，但不影响 JSON；保留在字符串内部
+                        # 尝试匹配 JSON_START/JSON_END
+                        m = re.search(r"JSON_START\s*(\{[\s\S]*?\})\s*JSON_END", raw_norm)
+                        frag = None
+                        if m:
+                            frag = m.group(1)
+                        else:
+                            # 扫描最后一个 { .. }
+                            sraw = raw_norm
+                            starts = [i for i, ch in enumerate(sraw) if ch == "{"]
+                            for st in starts:
+                                depth = 0
+                                for j in range(st, len(sraw)):
+                                    ch = sraw[j]
+                                    if ch == "{":
+                                        depth += 1
+                                    elif ch == "}":
+                                        depth -= 1
+                                        if depth == 0:
+                                            cand = sraw[st:j+1]
+                                            try:
+                                                _ = json.loads(cand)
+                                                frag = cand
+                                            except Exception:
+                                                pass
+                                            break
+                        if frag:
+                            try:
+                                out_obj = json.loads(frag)
+                            except Exception:
+                                out_obj = None
+                        # 二次回退：若仍无法解析，尝试手工抽取 三类信息 与 time
+                        if not isinstance(out_obj, dict):
+                            # 手工模式：按行解析 "\"时空信息 01\":\"...\"" 或 全角形式
+                            fw = raw_norm
+                            # 简单时间提取
+                            import re as _re2
+                            time_match = _re2.search(r'"time"\s*:\s*"([0-9:\-\s]+)"', fw)
+                            if not time_match:
+                                time_match = _re2.search(r'"时间"\s*:\s*"([0-9:\-\s]+)"', fw)
+                            # 提取三类信息键值对（支持多条，含同义键名）
+                            kv_pairs = []
+                            for pat in [
+                                r'"(时空信息\s*\d{1,2})"\s*:\s*"([^"]+?)"',
+                                r'"(历史信息\s*\d{1,2})"\s*:\s*"([^"]+?)"',
+                                r'"(历史统计\s*\d{1,2})"\s*:\s*"([^"]+?)"',
+                                r'"(态势感知\s*\d{1,2})"\s*:\s*"([^"]+?)"',
+                                r'"(态势预测\s*\d{1,2})"\s*:\s*"([^"]+?)"',
+                            ]:
+                                kv_pairs.extend(_re2.findall(pat, fw))
+                            if kv_pairs:
+                                tmp_obj: Dict[str, Any] = {}
+                                if time_match:
+                                    tmp_obj["time"] = time_match.group(1)
+                                for k, v in kv_pairs:
+                                    tmp_obj[k] = v
+                                out_obj = tmp_obj if tmp_obj else None
+                if not isinstance(out_obj, dict):
+                    continue
+                time_val = out_obj.get("time") or out_obj.get("时间")
+                if not time_val:
+                    for k, v in out_obj.items():
+                        if isinstance(k, str) and k.startswith("时空信息") and isinstance(v, dict):
+                            time_val = v.get("时间") or v.get("time")
+                            if time_val:
+                                break
+                if not time_val:
+                    time_val = rec.get("ts")
+                pack = {"time": time_val}
+                # 收集三类信息并归一化
+                all_items: List[Tuple[str, Any]] = []
+                for raw_k, v in out_obj.items():
+                    if not isinstance(raw_k, str):
+                        continue
+                    nk = _norm_key(raw_k)
+                    if isinstance(nk, str) and (
+                        nk.startswith("时空信息 ") or nk.startswith("历史信息 ") or nk.startswith("态势感知 ")
+                    ):
+                        all_items.append((nk, v))
+                # 排序：时空信息→历史信息→态势感知，各自编号升序
+                def _sort_key(item: Tuple[str, Any]) -> Tuple[int, int]:
+                    name = item[0]
+                    if name.startswith("时空信息 "):
+                        cat = 0
+                    elif name.startswith("历史信息 "):
+                        cat = 1
+                    else:
+                        cat = 2
+                    m = re.search(r" (\d{2})$", name)
+                    num = int(m.group(1)) if m else 99
+                    return (cat, num)
+                for nk, v in sorted(all_items, key=_sort_key):
+                    if isinstance(v, dict):
+                        pack[nk] = _build_sentence(v)
+                    elif isinstance(v, str):
+                        pack[nk] = v if v.endswith("；") or v.endswith("。") else v + "；"
+                    else:
+                        pack[nk] = ""
+                results.append(pack)
+        try:
+            with open(out_path, "w", encoding="utf-8") as wf:
+                json.dump(results, wf, ensure_ascii=False, indent=2)
+            logger.info(f"[TASK1] 导出完成 -> {out_path} (records={len(results)})")
+        except Exception as e:
+            logger.warning(f"[TASK1] 写文件失败: {e}")
+            return None
+        return out_path
 
     # =====================================================================
     # MARL 训练

@@ -53,24 +53,69 @@ class KGServiceLocal:
 
         self._log.debug("[KGCTX] cache=MISS focus=%s limit=%d", key[0], limit)
         lines: List[str] = []
+        seen: set[str] = set()
+
+        def _push(line: str) -> None:
+            txt = str(line).strip()
+            if not txt or txt in seen:
+                return
+            seen.add(txt)
+            lines.append(txt)
+
+        # 属性谓词集合，用于补充节点属性到上下文
+        prop_meta = getattr(self.kg, "PREDICATE_MAP", {}) if hasattr(self.kg, "PREDICATE_MAP") else {}
+        prop_predicates = {
+            key
+            for key, meta in prop_meta.items()
+            if isinstance(meta, dict) and meta.get("type") == "prop"
+        }
+
+        limit_int = max(1, int(limit))
+
         try:
             if focus_entities:
                 for ent in focus_entities:
-                    nb = self.kg.neighbors(ent)
-                    if nb.get("out"):
-                        for s, p, o in nb["out"][: max(1, limit) // 2]:
-                            lines.append(f"{s} -[{p}]-> {o}")
-                    if nb.get("in"):
-                        for s, p, o in nb["in"][: max(1, limit) // 2]:
-                            lines.append(f"{s} -[{p}]-> {o}")
+                    ent_name = str(ent).strip()
+                    if not ent_name:
+                        continue
+                    try:
+                        nb = self.kg.neighbors(ent_name)
+                    except Exception:
+                        nb = {}
+
+                    out_edges = nb.get("out") or []
+                    in_edges = nb.get("in") or []
+                    # 为入/出边与属性预留配额，避免单类信息占满上下文
+                    per_direction_cap = max(1, limit_int // 3)
+                    for s, p, o in out_edges[:per_direction_cap]:
+                        _push(f"{s} -[{p}]-> {o}")
+                    for s, p, o in in_edges[:per_direction_cap]:
+                        _push(f"{s} -[{p}]-> {o}")
+
+                    if prop_predicates and hasattr(self.kg, "query"):
+                        try:
+                            triples = self.kg.query(ent_name) or []
+                        except Exception:
+                            triples = []
+                        attr_cap = max(1, limit_int // 3)
+                        attr_count = 0
+                        for _, predicate, obj in triples:
+                            if predicate in prop_predicates and obj:
+                                _push(f"{ent_name} 的{predicate}: {obj}")
+                                attr_count += 1
+                            if attr_count >= attr_cap:
+                                break
             else:
                 snap = self.kg.graph_snapshot()
-                lines.append(
+                _push(
                     f"[SNAPSHOT] nodes={snap.get('nodes_count',0)} edges={snap.get('edges_count',0)}"
                 )
         except Exception as _e:  # pragma: no cover
             pass
-        ctx = "\n".join(lines[:limit])
+        if not lines:
+            _push("(当前图为空或仅有固定节点)")
+
+        ctx = "\n".join(lines[:limit_int])
         if not ctx:
             ctx = "(当前图为空或仅有固定节点)"
         text = "【KG状态】\n" + ctx

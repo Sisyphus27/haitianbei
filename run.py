@@ -56,8 +56,9 @@ def main():
                         help="日志等级，默认 INFO，可用环境变量 HTB_LOG_LEVEL 覆盖")
 
     # 模型相关
-    parser.add_argument("--base_model_dir", default=os.path.join(default_root, "models", "Qwen3-4B"),
-                        help="底座模型目录（Qwen3-4B）")
+    # 默认使用可由 Transformers 直接加载的检查点目录（非 GGUF）
+    parser.add_argument("--base_model_dir", default=os.path.join(default_root, "models", "Qwen2_5-14B-Instruct"),
+                        help="底座模型目录（Transformers 可加载，非 GGUF）")
     parser.add_argument("--lora_out_dir", default=os.path.join(default_root, "results_entity_judge", "lora"),
                         help="LoRA 训练输出目录")
     # 可选：分别为 judge 与 decomposer 指定独立的输出目录（若不指定，将使用 --lora_out_dir 并在内部做默认分目录隔离）
@@ -71,7 +72,7 @@ def main():
     parser.add_argument("--decomp_lora_adapter_dir", default=None, help="分解器 LoRA 适配器目录（可选）")
     parser.add_argument(
         "--decomp_base_model_dir",
-        default=os.path.join(default_root, "models", "Qwen2_5-0.6B"),
+        default=os.path.join(default_root, "models", "Qwen2_5-3B"),
         help="分解器基座模型目录（默认 Qwen3-0.6B）",
     )
 
@@ -88,6 +89,11 @@ def main():
     parser.add_argument("--use_4bit", action="store_true", default=False, help="开启4bit量化（Windows 常不建议）")
     parser.add_argument("--no_fp16", action="store_true", default=False, help="关闭fp16，改用bf16/float32")
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto", help="训练设备优先级：auto/cuda/cpu")
+    # 推理控制
+    parser.add_argument("--generate_timeout_sec", type=float, default=120.0, help="单条生成超时（秒），避免长时间卡住")
+    parser.add_argument("--cpu_max_new_tokens", type=int, default=256, help="CPU 推理下的最大生成 token 数上限")
+    parser.add_argument("--retry_max_new_tokens", type=int, default=1024, help="重试/降级阶段的最大生成 token 数上限")
+    parser.add_argument("--no_simple_fallback", action="store_true", default=False, help="禁用 simple 降级（保持完整输出重试）")
 
     # 训练后端：hf（Transformers+PEFT）或 llama-factory
     parser.add_argument("--train_backend", choices=["hf", "llama-factory"], default="hf",
@@ -102,6 +108,25 @@ def main():
     parser.add_argument("--no_vllm", action="store_true", default=False, help="禁用 vLLM，回退 transformers 推理")
     parser.add_argument("--batch_size", type=int, default=4, help="stream-judge 小批量大小")
     parser.add_argument("--simple_output", action="store_true", default=False, help="推理仅输出‘合规/冲突’，不带依据与建议")
+    # 判定模型量化控制
+    parser.add_argument(
+        "--judge_quant",
+        choices=["auto", "none", "int8", "int4"],
+        default="auto",
+        help=(
+            "judge 模型量化方式：auto(默认，优先int8) / none(禁用量化) / int8(bitsandbytes) / int4(nf4)。"
+            "auto：若可用bitsandbytes则使用int8，否则CUDA下用float16。"
+        ),
+    )
+    # 时空信息抽取 / 冲突判定 开关：
+    # conflict_judge=True (默认) => 先抽取时空信息，再进行冲突判定并输出 判定/reason/suggest
+    # conflict_judge=False      => 仅抽取时空信息 JSON，不输出 判定/reason/suggest，也不拼接规则文本
+    parser.add_argument("--conflict_judge", type=int, choices=[0, 1], default=0,
+                        help="1=抽取+冲突判定；0=仅抽取时空信息(不输出判定/reason/suggest)")
+    # 任务一评分规则格式导出：将流式判定的 JSONL 重组为 {time, 时空信息 01, 时空信息 02, ...} 数组 JSON 文件
+    parser.add_argument("--export_task1_json",
+                        default=os.path.join(default_root, "results", "task1", "task1_result.json"),
+                        help="任务一格式最终结果文件路径(默认: results/task1/task1_result.json)。生成数组，每元素包含 time + 时空信息 01..NN")
     parser.add_argument("--print_decomposition", action="store_true", default=False, help="在判定前打印分解器输出(JSON)")
     # 预热控制
     parser.add_argument("--no_warmup", action="store_true", default=False, help="禁用模型预热（首次推理会更慢）")
@@ -189,6 +214,9 @@ def main():
         format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
         datefmt="%H:%M:%S",
     )
+    # 提前提示任务一导出路径
+    if getattr(args, "export_task1_json", None):
+        logging.info(f"[TASK1] 导出默认路径: {args.export_task1_json}")
     # 统一入口：直接交给 Exp_main.run()
     exp = Exp_main(args)
     exp.run()

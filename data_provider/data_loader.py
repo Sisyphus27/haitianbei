@@ -109,6 +109,7 @@ class Dataset_KG(Dataset):
             with self.driver.session(database=self.neo4j_database) as sess:
                 sess.run("RETURN 1 AS ok").single()
         except Exception as e:  # noqa: BLE001
+            # 修复拼写错误: aise -> raise
             raise RuntimeError(f"无法连接 Neo4j: {e}")
 
         # 定义类标签与关系/属性映射（可控制是否尝试创建唯一约束）
