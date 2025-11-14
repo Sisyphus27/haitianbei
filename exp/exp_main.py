@@ -2574,7 +2574,12 @@ class Exp_main(Exp_Basic):
         decomp_available: bool,
         conflict_judge: bool = True,
     ) -> str:
-        """处理单个事件：推理、解析、保存、更新KG（单样本优化版本）。"""
+        """处理单个事件：推理、解析、保存、更新KG（单样本优化版本）。
+        
+        参数:
+        - conflict_judge=True: 冲突判定模式，需要解析"合规/冲突"标签，需要重试逻辑
+        - conflict_judge=False: 仅抽取时空信息模式，不需要解析标签，不需要重试逻辑
+        """
         # 单样本推理
         out: Optional[str] = None
         try:
@@ -2588,12 +2593,70 @@ class Exp_main(Exp_Basic):
             out = (outs[0] if outs else "") or ""
         except (RuntimeError, OSError, MemoryError) as err:
             try:
-                _logging.warning(f"[JUDGE] 主模型推理失败，尝试降级：{err}")
+                _logging.warning(f"[JUDGE] 主模型推理失败：{err}")
             except Exception:
                 pass
             out = None
 
-        # 重试逻辑
+        # === conflict_judge=False：仅抽取时空信息模式 ===
+        if not conflict_judge:
+            # 不需要重试逻辑，不需要解析标签，直接保存输出
+            if out is None or not out.strip():
+                # 如果生成失败，尝试重试一次（仅限生成失败，不涉及解析）
+                try:
+                    outs = self._generate_with_handle(
+                        "judge",
+                        [prompt],
+                        max_tokens=int(self.retry_max_new_tokens),
+                        temperature=0.0,
+                        timeout_sec=self.generate_timeout_sec,
+                    )
+                    out = (outs[0] if outs else "") or ""
+                except Exception:
+                    out = ""
+            
+            # 保存输出（不需要解析"合规/冲突"标签）
+            try:
+                import json as __json
+                import time as __t
+
+                payload = {
+                    "ts": __t.strftime("%Y-%m-%d %H:%M%S", __t.localtime()),
+                    "event": event,
+                    "model": "judge",
+                }
+                # 尝试解析 JSON，但不要求"合规/冲突"标签
+                try:
+                    payload["output"] = __json.loads(out) if isinstance(out, str) else out
+                except Exception:
+                    payload["output_raw"] = out
+                self._append_jsonl(self._judge_out_file, payload)
+            except Exception:
+                pass
+
+            # 更新 KG（不需要检查冲突，直接更新）
+            if self.kg_service is not None:
+                try:
+                    self.kg_service.extract_and_update(event)
+                except Exception:
+                    pass
+
+                # KG 可视化
+                try:
+                    import time as __t
+                    self.kg_vis_idx += 1
+                    ts = int(__t.time())
+                    out_png = os.path.join(
+                        self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
+                    )
+                    self.kg_service.export_png(out_png)
+                except Exception:
+                    pass
+
+            return out or ""
+
+        # === conflict_judge=True：冲突判定模式 ===
+        # 重试逻辑（仅限冲突判定模式）
         if out is None or not out.strip():
             try:
                 if self.no_simple_fallback:
@@ -2613,7 +2676,7 @@ class Exp_main(Exp_Basic):
                         rules_text,
                         kg_text,
                         simple=True,
-                        conflict_judge=conflict_judge,
+                        conflict_judge=True,  # 确保使用冲突判定模式
                     )
                     fallback_key = "decomp" if decomp_available else "judge"
                     outs = self._generate_with_handle(
@@ -2627,10 +2690,10 @@ class Exp_main(Exp_Basic):
             except Exception:
                 out = ""
 
-        # 解析输出
+        # 解析输出（仅限冲突判定模式）
         parsed = self._parse_judge_output(out) if out else {"parsed": False, "compliance": None, "reasons_len": 0}
         
-        # 如果解析失败，再次重试
+        # 如果解析失败，再次重试（仅限冲突判定模式）
         if not simple_output and not bool(parsed.get("parsed")):
             try:
                 if self.no_simple_fallback:
@@ -2652,7 +2715,7 @@ class Exp_main(Exp_Basic):
                         rules_text,
                         kg_text,
                         simple=True,
-                        conflict_judge=conflict_judge,
+                        conflict_judge=True,  # 确保使用冲突判定模式
                     )
                     fallback_key = "decomp" if decomp_available else "judge"
                     outs = self._generate_with_handle(
@@ -2668,7 +2731,7 @@ class Exp_main(Exp_Basic):
             except Exception:
                 pass
 
-        # simple_output 处理
+        # simple_output 处理（仅限冲突判定模式）
         if simple_output and out:
             if "合规" in out:
                 out = "合规"
@@ -2677,7 +2740,7 @@ class Exp_main(Exp_Basic):
             else:
                 out = out.strip().splitlines()[0] if out.strip() else ""
 
-        # 保存输出
+        # 保存输出（冲突判定模式）
         try:
             import json as __json
             import time as __t
@@ -2710,7 +2773,7 @@ class Exp_main(Exp_Basic):
         except Exception:
             pass
 
-        # 更新 KG
+        # 更新 KG（冲突判定模式：需要检查冲突）
         if self.kg_service is not None:
             kg_reasons_cnt = 0
             try:
@@ -2870,6 +2933,7 @@ class Exp_main(Exp_Basic):
             return
 
         # 批量处理模式（batch_size > 1）：累积batch后批量处理
+        conflict_judge_mode = bool(getattr(self.args, "conflict_judge", 1))
         batch_events: List[str] = []
         batch_prompts: List[str] = []
         for ev in events_iter:
@@ -2879,9 +2943,9 @@ class Exp_main(Exp_Basic):
             # 针对每条事件，使用"当前"KG状态生成 prompt（先判后更）
             cur_focus = self._extract_focus_entities(ev)
             kg_text = self._get_kg_context(cur_focus)
-            # 可选：先调用小LLM做问题分解
+            # 可选：先调用小LLM做问题分解（仅在冲突判定模式）
             decomp_text = None
-            if use_decomposer and decomp_available:
+            if conflict_judge_mode and use_decomposer and decomp_available:
                 # TODO: before training, using base model as default
                 try:
                     d_prompt = self._format_decompose_prompt(ev, rules_text, kg_text)
@@ -2910,29 +2974,22 @@ class Exp_main(Exp_Basic):
                         self._append_jsonl(self._decomp_out_file, payload)
                     except Exception:
                         pass
-                except Exception as _e:
-                    decomp_text = None
-            elif use_decomposer and not decomp_available:
-                try:
-                    _logging.warning("[DECOMP] 已启用分解器但未加载分解模型，跳过该步骤")
                 except Exception:
-                    pass
-            # 可选：打印分解器输出，便于人工复核
-            # 按要求不输出具体内容
+                    decomp_text = None
+            
             if show_decomposition and decomp_text:
                 try:
                     _logging.info("[SAVE] 分解器输出已保存到 JSONL（不在控制台展示）")
                 except Exception:
                     pass
 
-            # 主提示：附加分解结果（若有）
-            # 注：为提高主模型对最终 JSON 结构的遵循度，不再将分解器输出注入主提示，避免多余JSON干扰。
+            # 主提示：根据 conflict_judge 模式构建提示
             prompt = self._format_conflict_prompt_with_mode(
                 ev,
                 rules_text,
                 kg_text,
                 simple=simple_output,
-                conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                conflict_judge=conflict_judge_mode,
             )
             batch_events.append(ev)
             batch_prompts.append(prompt)
@@ -2949,15 +3006,73 @@ class Exp_main(Exp_Basic):
                     )
                 except (RuntimeError, OSError, MemoryError) as err:
                     try:
-                        _logging.warning(f"[JUDGE] 主模型推理失败，尝试 simple 降级：{err}")
+                        _logging.warning(f"[JUDGE] 主模型推理失败：{err}")
                     except Exception:
                         pass
                     outs = None
 
+                # === conflict_judge=False：仅抽取时空信息模式，不需要重试逻辑 ===
+                if not conflict_judge_mode:
+                    # 如果生成失败，尝试重试一次（仅限生成失败，不涉及解析）
+                    if outs is None:
+                        try:
+                            outs = self._generate_with_handle(
+                                "judge",
+                                batch_prompts,
+                                max_tokens=int(self.retry_max_new_tokens),
+                                temperature=0.0,
+                                timeout_sec=self.generate_timeout_sec,
+                            )
+                        except Exception:
+                            outs = [""] * len(batch_prompts)
+                    
+                    # 批量保存输出（不需要解析"合规/冲突"标签）
+                    for e, o in zip(batch_events, outs):
+                        try:
+                            import json as __json
+                            import time as __t
+
+                            payload = {
+                                "ts": __t.strftime("%Y-%m-%d %H:%M%S", __t.localtime()),
+                                "event": e,
+                                "model": "judge",
+                            }
+                            try:
+                                payload["output"] = __json.loads(o) if isinstance(o, str) else o
+                            except Exception:
+                                payload["output_raw"] = o
+                            self._append_jsonl(self._judge_out_file, payload)
+                        except Exception:
+                            pass
+
+                        # 更新 KG（不需要检查冲突，直接更新）
+                        if self.kg_service is not None:
+                            try:
+                                self.kg_service.extract_and_update(e)
+                            except Exception:
+                                pass
+
+                            # KG 可视化
+                            try:
+                                import time as __t
+                                self.kg_vis_idx += 1
+                                ts = int(__t.time())
+                                out_png = os.path.join(
+                                    self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
+                                )
+                                self.kg_service.export_png(out_png)
+                            except Exception:
+                                pass
+
+                        yield (e, o)
+                    batch_events, batch_prompts = [], []
+                    continue
+
+                # === conflict_judge=True：冲突判定模式，需要重试逻辑 ===
                 if outs is None:
                     try:
                         if self.no_simple_fallback:
-                            # 不进行 simple 降级；直接按原始完整提示重试一次，保持较大输出上限
+                            # 不进行 simple 降级；直接按原始完整提示重试一次
                             outs = self._generate_with_handle(
                                 "judge",
                                 batch_prompts,
@@ -2966,7 +3081,7 @@ class Exp_main(Exp_Basic):
                                 timeout_sec=self.generate_timeout_sec,
                             )
                         else:
-                            # simple 降级（保持原逻辑，但 max_tokens 改为可配置上限）
+                            # simple 降级（仅限冲突判定模式）
                             retry_prompts: List[str] = []
                             for ev_i in batch_events:
                                 _focus = self._extract_focus_entities(ev_i)
@@ -2977,7 +3092,7 @@ class Exp_main(Exp_Basic):
                                         rules_text,
                                         _kg_txt,
                                         simple=True,
-                                        conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                                        conflict_judge=True,  # 确保使用冲突判定模式
                                     )
                                 )
                             fallback_key = "decomp" if decomp_available else "judge"
@@ -2990,7 +3105,8 @@ class Exp_main(Exp_Basic):
                             )
                     except Exception:
                         outs = [""] * len(batch_prompts)
-                # 若非 simple_output，则对无法解析的样本进行一次降级重试（simple 模式，仅输出“合规/冲突”）
+                
+                # 解析失败后的重试（仅限冲突判定模式）
                 if not simple_output:
                     try:
                         parsed_list = [self._parse_judge_output(o) for o in outs]
@@ -3026,7 +3142,7 @@ class Exp_main(Exp_Basic):
                                             rules_text,
                                             _kg_txt,
                                             simple=True,
-                                            conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                                            conflict_judge=True,  # 确保使用冲突判定模式
                                         )
                                     )
                                 # 执行一次小步重试（simple 提示，但使用可配置上限）
@@ -3181,11 +3297,68 @@ class Exp_main(Exp_Basic):
                 )
             except (RuntimeError, OSError, MemoryError) as err:
                 try:
-                    _logging.warning(f"[JUDGE] 主模型推理失败，尝试 simple 降级：{err}")
+                    _logging.warning(f"[JUDGE] 主模型推理失败：{err}")
                 except Exception:
                     pass
                 outs = None
 
+            # === conflict_judge=False：仅抽取时空信息模式，不需要重试逻辑 ===
+            if not conflict_judge_mode:
+                # 如果生成失败，尝试重试一次（仅限生成失败，不涉及解析）
+                if outs is None:
+                    try:
+                        outs = self._generate_with_handle(
+                            "judge",
+                            batch_prompts,
+                            max_tokens=int(self.retry_max_new_tokens),
+                            temperature=0.0,
+                            timeout_sec=self.generate_timeout_sec,
+                        )
+                    except Exception:
+                        outs = [""] * len(batch_prompts)
+                
+                # 批量保存输出（不需要解析"合规/冲突"标签）
+                for e, o in zip(batch_events, outs):
+                    try:
+                        import json as __json
+                        import time as __t
+
+                        payload = {
+                            "ts": __t.strftime("%Y-%m-%d %H:%M%S", __t.localtime()),
+                            "event": e,
+                            "model": "judge",
+                        }
+                        try:
+                            payload["output"] = __json.loads(o) if isinstance(o, str) else o
+                        except Exception:
+                            payload["output_raw"] = o
+                        self._append_jsonl(self._judge_out_file, payload)
+                    except Exception:
+                        pass
+
+                    # 更新 KG（不需要检查冲突，直接更新）
+                    if self.kg_service is not None:
+                        try:
+                            self.kg_service.extract_and_update(e)
+                        except Exception:
+                            pass
+
+                        # KG 可视化
+                        try:
+                            import time as __t
+                            self.kg_vis_idx += 1
+                            ts = int(__t.time())
+                            out_png = os.path.join(
+                                self.kg_vis_dir, f"kg_{ts}_{self.kg_vis_idx:04d}.png"
+                            )
+                            self.kg_service.export_png(out_png)
+                        except Exception:
+                            pass
+
+                    yield (e, o)
+                return
+
+            # === conflict_judge=True：冲突判定模式，需要重试逻辑 ===
             if outs is None:
                 try:
                     if self.no_simple_fallback:
@@ -3208,7 +3381,7 @@ class Exp_main(Exp_Basic):
                                     rules_text,
                                     _kg_txt,
                                     simple=True,
-                                    conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                                    conflict_judge=True,  # 确保使用冲突判定模式
                                 )
                             )
                         fallback_key = "decomp" if decomp_available else "judge"
@@ -3221,7 +3394,8 @@ class Exp_main(Exp_Basic):
                         )
                 except Exception:
                     outs = [""] * len(batch_prompts)
-            # 若非 simple_output，则对无法解析的样本进行一次降级重试（simple 模式，仅输出“合规/冲突”）
+            
+            # 解析失败后的重试（仅限冲突判定模式）
             if not simple_output:
                 try:
                     parsed_list = [self._parse_judge_output(o) for o in outs]
@@ -3255,7 +3429,7 @@ class Exp_main(Exp_Basic):
                                         rules_text,
                                         _kg_txt,
                                         simple=True,
-                                        conflict_judge=bool(getattr(self.args, "conflict_judge", 1)),
+                                        conflict_judge=True,  # 确保使用冲突判定模式
                                     )
                                 )
                             try:
