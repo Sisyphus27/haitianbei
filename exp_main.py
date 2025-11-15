@@ -174,17 +174,7 @@ class Exp_main(Exp_Basic):
         # 是否启用KG可视化（默认禁用以提高性能）
         self.enable_kg_vis = not bool(getattr(self.args, "disable_kg_vis", True))
         # 输出保存目录（区分大小模型）
-        # 如果指定了 task2_output_dir，使用该目录；否则使用默认目录
-        task2_output_dir = getattr(self.args, "task2_output_dir", None)
-        if task2_output_dir and os.path.isabs(task2_output_dir):
-            # 绝对路径，直接使用
-            self.results_out_dir = task2_output_dir
-        elif task2_output_dir:
-            # 相对路径，相对于 root
-            self.results_out_dir = os.path.join(self.root, task2_output_dir)
-        else:
-            # 默认目录
-            self.results_out_dir = os.path.join(self.root, "results", "model_outputs")
+        self.results_out_dir = os.path.join(self.root, "results", "model_outputs")
         self.judge_out_dir = os.path.join(self.results_out_dir, "judge")
         self.decomp_out_dir = os.path.join(self.results_out_dir, "decomp")
         os.makedirs(self.judge_out_dir, exist_ok=True)
@@ -623,8 +613,7 @@ class Exp_main(Exp_Basic):
                     decomp_model_dir, decomp_lora_dir, "decomp"
                 )
             except Exception as exc:  # noqa: BLE001
-                _logging.error(f"[MODEL] 分解模型加载失败，跳过：{exc}")
-                _logging.exception("[MODEL] 分解模型加载失败详细错误信息：")
+                _logging.warning(f"[MODEL] 分解模型加载失败，跳过：{exc}")
                 handles["decomp"] = {
                     "tokenizer": None,
                     "model": None,
@@ -894,13 +883,9 @@ class Exp_main(Exp_Basic):
     # ----------------------------
     # 规则学习与冲突判断（训练/推理）
     # ----------------------------
-    def build_rules_prompt(self, rules_md_path: str, mode: str = "task1") -> str:
+    def build_rules_prompt(self, rules_md_path: str) -> str:
         """读取技术资料 Markdown，构造基础规则提示词。
 
-        参数:
-            rules_md_path: 规则文档路径
-            mode: 模式，可选值 "task1" 或 "conflict_judge"
-        
         返回一个可作为系统/前置提示的长文本，用于指导大模型基于规则进行判断。
         """
         if not os.path.isfile(rules_md_path):
@@ -914,41 +899,12 @@ class Exp_main(Exp_Basic):
         md = "\n".join(
             [ln.rstrip() for ln in md.splitlines() if ln.strip() != ""]
         )  # 去空白行
-        
-        # 根据模式进行不同的处理
-        if mode == "conflict_judge":
-            # 冲突判定模式：清理HTML表格，限制长度
-            # 去除HTML表格标签
-            md = re.sub(r"<table[^>]*>.*?</table>", "", md, flags=re.DOTALL | re.IGNORECASE)
-            md = re.sub(r"<tr[^>]*>.*?</tr>", "", md, flags=re.DOTALL | re.IGNORECASE)
-            md = re.sub(r"<td[^>]*>.*?</td>", "", md, flags=re.DOTALL | re.IGNORECASE)
-            md = re.sub(r"<th[^>]*>.*?</th>", "", md, flags=re.DOTALL | re.IGNORECASE)
-            # 去除其他HTML标签
-            md = re.sub(r"<[^>]+>", "", md)
-            # 去除HTML实体
-            md = re.sub(r"&[a-zA-Z]+;", "", md)
-            # 清理多余空白
-            md = re.sub(r"\s+", " ", md)
-            md = "\n".join([ln.rstrip() for ln in md.splitlines() if ln.strip() != ""])
-            
-            # 限制规则文档长度（最多5000字符）
-            if len(md) > 5000:
-                # 优先保留前面的内容（通常是总则和重要规则）
-                md = md[:5000] + "\n\n[规则文档已截断，仅保留前5000字符]"
-            
-            # 冲突判定模式的前缀
-            prefix = (
-                "你是一名冲突判定专家。你的任务是基于规则和知识图谱判定事件是否冲突。\n\n"
-                "【规则文档】\n"
-            )
-        else:
-            # 任务一模式：保持原有逻辑
-            prefix = (
-                "你是一名航保作业助手。你的主要任务是根据知识图谱和文本信息来整理航保作业状态"
-                # "当输入一段新事件文本时，需要结合当前知识图谱状态，回答是否与现有状态或规则冲突，并给出依据。\n\n"
-                "【规则文档】\n"
-            )
-        
+        # 前缀提示：
+        prefix = (
+            "你是一名航保作业助手。你的主要任务是根据知识图谱和文本信息来整理航保作业状态"
+            # "当输入一段新事件文本时，需要结合当前知识图谱状态，回答是否与现有状态或规则冲突，并给出依据。\n\n"
+            "【规则文档】\n"
+        )
         return prefix + md
 
     def _format_conflict_prompt_with_mode(
@@ -1022,30 +978,21 @@ class Exp_main(Exp_Basic):
             )
         else:
             instruction = (
-                "任务：基于规则+KG判定事件是否冲突，并给出重调度建议。\n\n"
-                "【重要】输出要求：\n"
-                "1. 只输出一个 JSON 对象，且必须放在 JSON_START 与 JSON_END 之间。\n"
-                "2. 不得出现任何额外文字、Markdown代码块、解释或说明。\n"
-                "3. JSON对象必须包含以下三个字段（按顺序）：\n\n"
-                "【必需字段】\n"
-                "1) \"判定\"（必需）：必须是 \"合规\" 或 \"冲突\" 之一，不能为空或缺失。这是最重要的字段，缺失将导致解析失败。\n"
-                "2) \"reason\"（必需）：冲突/合规的精炼依据，1-3 条短句组成的数组；无则 []。\n"
-                "3) \"suggest\"（必需）：操作性建议；若合规填 \"无\"。若冲突，必须明确指出哪些飞机需要重新调度（格式：[\"飞机A001\", \"飞机A002\"]）。\n\n"
-                "【输出示例】\n"
-                "以下是正确的输出格式示例：\n"
-                "JSON_START\n"
-                "{\n"
-                '  "判定": "冲突",\n'
-                '  "reason": ["5号停机位供电接口异常，导致作业暂停"],\n'
-                '  "suggest": ["飞机A008"]\n'
-                "}\n"
-                "JSON_END\n\n"
-                "【严格约束】\n"
-                "- \"判定\"字段是必需的，必须为 \"合规\" 或 \"冲突\"，不能为空、null或缺失。\n"
-                "- 不得输出时空信息、时间等字段。\n"
-                "- 不得输出示例、解释或代码围栏以外文本。\n"
-                "- JSON必须能被标准JSON解析器解析。\n\n"
-                "【最终输出格式（仅以下三行）】\n"
+                "任务：解析事件中的所有时空作业信息，并基于规则+KG判定是否冲突。\n"
+                "只输出一个 JSON 对象，且必须放在 JSON_START 与 JSON_END 之间；不得出现任何额外文字/Markdown。\n"
+                "键与顺序（必须按照此顺序排列）：\n"
+                "1) time: 归一化时间 YYYY-MM-DD HH:MM:SS；若事件含多个时刻，可填首个关键时刻；缺失可填空字符串。\n"
+                "2) 时空信息01..NN: 按出现顺序编号的对象，每个对象尽可能包含以下键（缺失可省略）：\n"
+                "   - 时间、飞机ID、停机位ID、作业ID、飞机状态、停机位状态、作业持续时间、预测剩余作业时间\n"
+                "3) 判定: 仅 '合规' 或 '冲突'。\n"
+                "4) reason: 冲突/合规的精炼依据，1-3 条短句组成的数组；无则 [].\n"
+                "5) suggest: 操作性建议；若合规填 '无'。\n"
+                "严格要求：\n"
+                "- 时空信息01..NN 必须全部在前；判定/reason/suggest 放在最后。\n"
+                "- 必须至少包含 '时空信息01' 键；若文本无法抽取任何要素，'时空信息01' 的值使用空对象 {}。\n"
+                "- 不得输出除上述以外的键；不得输出示例、解释或代码围栏以外文本。\n"
+                "- 时间需归一化为 YYYY-MM-DD HH:MM:SS；无法确定具体日期可采用同一日期占位。\n"
+                "输出格式（仅以下三行）：\n"
                 "JSON_START\n"
                 "{...}\n"
                 "JSON_END"
@@ -2978,15 +2925,12 @@ class Exp_main(Exp_Basic):
         decomp_handle = self._model_handles.get("decomp") if hasattr(self, "_model_handles") else None
         decomp_available = bool(decomp_handle and decomp_handle.get("model"))
 
-        # conflict_judge模式（提前获取，避免重复getattr）
-        conflict_judge_mode = bool(getattr(self.args, "conflict_judge", 1))
+        # 规则提示一次构建，复用
+        rules_text = self.build_rules_prompt(rules_md_path) if rules_md_path else ""
         # 小LLM分解器配置
         use_decomposer = bool(getattr(self.args, "enable_decomposer", False))
-        
-        # 规则提示一次构建，复用
-        # 根据 conflict_judge_mode 传入正确的 mode 参数
-        rules_mode = "conflict_judge" if conflict_judge_mode else "task1"
-        rules_text = self.build_rules_prompt(rules_md_path, mode=rules_mode) if rules_md_path else ""
+        # conflict_judge模式（提前获取，避免重复getattr）
+        conflict_judge_mode = bool(getattr(self.args, "conflict_judge", 1))
 
         # 单样本处理模式（batch_size=1）：每条事件立即处理，不需要累积batch
         is_single_sample = max(1, int(batch_size)) == 1
@@ -3001,7 +2945,7 @@ class Exp_main(Exp_Basic):
                 # 针对每条事件，使用"当前"KG状态生成 prompt（先判后更）
                 # 优化：减少KG上下文查询量（抽取模式使用更少的KG信息）
                 cur_focus = self._extract_focus_entities(ev)
-                kg_limit = 30 if not conflict_judge_mode else 100  # 抽取模式大幅减少KG信息，冲突判定模式限制为100
+                kg_limit = 30 if not conflict_judge_mode else 200  # 抽取模式大幅减少KG信息
                 kg_text = self._get_kg_context(cur_focus, limit=kg_limit) if self.kg_service else ""
                 
                 # 可选：先调用小LLM做问题分解
@@ -3840,18 +3784,7 @@ class Exp_main(Exp_Basic):
                     m = re.search(r" (\d{2})$", name)
                     num = int(m.group(1)) if m else 99
                     return (cat, num)
-                
-                # 空值检查函数：判断字段值是否为空
-                def _is_empty_value(v: Any) -> bool:
-                    if not isinstance(v, str):
-                        return not v  # 非字符串类型，按 falsy 判断
-                    stripped = v.strip()
-                    return not stripped or stripped == "；"
-                
                 for nk, v in sorted(all_items, key=_sort_key):
-                    # 过滤空值字段：完全为空、仅空白字符、或仅为"；"
-                    if _is_empty_value(v):
-                        continue  # 跳过空值字段
                     if isinstance(v, dict):
                         pack[nk] = _build_sentence(v)
                     elif isinstance(v, str):

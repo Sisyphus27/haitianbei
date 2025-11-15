@@ -356,10 +356,374 @@ def build_samples_from_train_triples(
 	return samples
 
 
+# ------------------------------------------------------------
+# 任务二：冲突检测与重调度相关工具
+# ------------------------------------------------------------
+
+# 冲突关键词模式
+_CONFLICT_KEYWORDS = [
+	"冲突", "不可用", "故障", "封锁", "暂停", "中断", "异常", 
+	"损坏", "维修", "修理", "故障不可用", "不可用时间", "必须停在.*修理"
+]
+
+_CONFLICT_PATTERN = re.compile("|".join(_CONFLICT_KEYWORDS))
+
+
+def detect_potential_conflict(event_text: str) -> bool:
+	"""初步检测事件文本中是否包含潜在冲突关键词。
+	
+	参数:
+		event_text: 事件文本字符串
+		
+	返回:
+		bool: True表示检测到潜在冲突，需要进一步调用大模型判定；False表示未检测到明显冲突关键词
+	"""
+	if not isinstance(event_text, str) or not event_text.strip():
+		return False
+	
+	# 检测是否包含冲突关键词
+	return bool(_CONFLICT_PATTERN.search(event_text))
+
+
+def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict, dict]:
+	"""从KG全局状态提取信息，生成符合readme.md快照格式的JSON配置。
+	
+	参数:
+		kg_service: KGServiceLocal实例
+		current_time_min: 当前时间（分钟）
+		
+	返回:
+		tuple[dict, dict]: (快照配置字典, 飞机ID映射字典)
+			- 快照配置字典：包含time, planes, stand_occupancy, blocked_stands等字段
+			- 飞机ID映射字典：{数字ID: 原始名称}，例如 {0: "飞机A001", 1: "飞机A002"}
+	"""
+	if not kg_service or not hasattr(kg_service, 'kg'):
+		return ({
+			"time": current_time_min,
+			"planes": [],
+			"stand_occupancy": {},
+			"blocked_stands": [],
+			"arrival_plan": {},
+			"devices": {"fixed": {}, "mobile": {}},
+			"disturbance_events": []
+		}, {})
+	
+	kg = kg_service.kg
+	if not hasattr(kg, 'driver') or not hasattr(kg, 'neo4j_database'):
+		return ({
+			"time": current_time_min,
+			"planes": [],
+			"stand_occupancy": {},
+			"blocked_stands": [],
+			"arrival_plan": {},
+			"devices": {"fixed": {}, "mobile": {}},
+			"disturbance_events": []
+		}, {})
+	
+	snapshot = {
+		"time": float(current_time_min),
+		"planes": [],
+		"stand_occupancy": {},
+		"blocked_stands": [],
+		"arrival_plan": {},
+		"devices": {"fixed": {}, "mobile": {}},
+		"disturbance_events": []  # 初始化扰动事件列表
+	}
+	
+	aircraft_map = {}  # 飞机名称 -> 数字ID映射（在try块外初始化，以便在异常时也能返回）
+	
+	try:
+		with kg.driver.session(database=kg.neo4j_database) as sess:
+			# 1. 提取飞机状态
+			# 查询所有飞机及其当前状态
+			aircraft_query = """
+			MATCH (a:Aircraft)
+			OPTIONAL MATCH (a)-[:HAS_CURRENT_GATE]->(s:Stand)
+			OPTIONAL MATCH (a)-[:CURRENT_JOB]->(j:Job)
+			OPTIONAL MATCH (a)-[:PERFORMS_JOB]->(pj:Job)
+			RETURN a.name AS name, 
+			       s.name AS current_site,
+			       collect(DISTINCT j.name) AS current_jobs,
+			       collect(DISTINCT pj.name) AS finished_jobs,
+			       a.isDamaged AS is_damaged
+			ORDER BY a.name
+			"""
+			
+			plane_id_counter = 0
+			
+			for record in sess.run(aircraft_query):
+				ac_name = record.get("name", "")
+				if not ac_name:
+					continue
+				
+				current_site = record.get("current_site")
+				current_jobs = [j for j in (record.get("current_jobs") or []) if j]
+				finished_jobs = [j for j in (record.get("finished_jobs") or []) if j]
+				is_damaged = bool(record.get("is_damaged", False))
+				
+				# 提取飞机编号（如"飞机A001" -> 0, "飞机A002" -> 1）
+				aircraft_map[ac_name] = plane_id_counter
+				
+				# 构建active_job字符串（支持并行作业，如"ZY04+ZY05"）
+				active_job = "+".join(current_jobs) if current_jobs else None
+				
+				# 确定状态：根据当前作业推断
+				status = "IDLE"
+				if current_jobs:
+					if any("ZY_Z" in j or "ZY_M" in j for j in current_jobs):
+						status = "MOVING"
+					elif any("ZY_T" in j for j in current_jobs):
+						status = "MOVING"
+					else:
+						status = "PROCESSING"
+				
+				# 提取停机位编号（如"停机位14" -> 14）
+				current_site_id = None
+				if current_site:
+					m = re.search(r"停机位(\d+)", str(current_site))
+					if m:
+						current_site_id = int(m.group(1))
+				
+				# 查询暂停的作业（如果有的话）
+				# 注意：当前KG可能不直接存储暂停状态，这里先尝试查询
+				# 如果找不到暂停信息，则保持空列表，但格式要正确
+				paused_jobs_list = []
+				
+				# 严格按照 readme.md 示例格式构建 plane_obj
+				# 只包含示例中出现的字段：plane_id, status, current_site_id, active_job, active_remaining, paused_jobs
+				plane_obj = {
+					"plane_id": plane_id_counter,
+					"status": status
+				}
+				
+				# 仅在存在时添加可选字段
+				if current_site_id is not None:
+					plane_obj["current_site_id"] = current_site_id
+				
+				if active_job:
+					plane_obj["active_job"] = active_job
+					# 为每个作业设置剩余时间
+					active_remaining = {}
+					for job in current_jobs:
+						active_remaining[job] = 5.0  # 默认5分钟
+					plane_obj["active_remaining"] = active_remaining
+				
+				# paused_jobs 仅在非空时添加（根据 readme 示例，空列表也可以包含）
+				if paused_jobs_list:
+					plane_obj["paused_jobs"] = paused_jobs_list
+				
+				snapshot["planes"].append(plane_obj)
+				plane_id_counter += 1
+			
+			# 2. 提取停机位占用情况
+			stand_query = """
+			MATCH (s:Stand)
+			OPTIONAL MATCH (a:Aircraft)-[:HAS_CURRENT_GATE]->(s)
+			RETURN s.name AS name, 
+			       s.isOccupied AS is_occupied,
+			       s.isDamaged AS is_damaged,
+			       collect(DISTINCT a.name) AS aircraft_names
+			ORDER BY s.name
+			"""
+			
+			for record in sess.run(stand_query):
+				stand_name = record.get("name", "")
+				if not stand_name:
+					continue
+				
+				m = re.search(r"停机位(\d+)", stand_name)
+				if not m:
+					continue
+				
+				stand_num = m.group(1)
+				is_occupied = bool(record.get("is_occupied", False))
+				is_damaged = bool(record.get("is_damaged", False))
+				aircraft_names = [a for a in (record.get("aircraft_names") or []) if a]
+				
+				# stand_occupancy: 占用则记录飞机ID，否则为null
+				if is_occupied and aircraft_names:
+					# 找到对应的飞机ID
+					ac_id = aircraft_map.get(aircraft_names[0])
+					if ac_id is not None:
+						snapshot["stand_occupancy"][stand_num] = ac_id
+					else:
+						snapshot["stand_occupancy"][stand_num] = None
+				else:
+					snapshot["stand_occupancy"][stand_num] = None
+				
+				# blocked_stands: 损坏的停机位
+				if is_damaged:
+					try:
+						stand_id = int(stand_num)
+						if stand_id not in snapshot["blocked_stands"]:
+							snapshot["blocked_stands"].append(stand_id)
+					except (ValueError, TypeError):
+						pass
+			
+			# 3. 提取设备状态（固定设备）
+			# 注意：FixedDevice节点同时有Device和FixedDevice标签
+			# 简化查询：只通过USING_DEVICE关系获取设备使用情况，避免ASSIGNED_TO_JOB_INSTANCE关系不存在的警告
+			fixed_device_query = """
+			MATCH (d:Device:FixedDevice)
+			OPTIONAL MATCH (a:Aircraft)-[:USING_DEVICE]->(d)
+			RETURN d.name AS name,
+			       d.coverage AS coverage,
+			       d.isOccupied AS is_occupied,
+			       d.isReserved AS is_reserved,
+			       collect(DISTINCT a.name) AS aircraft_names
+			ORDER BY d.name
+			"""
+			
+			for record in sess.run(fixed_device_query):
+				dev_name = record.get("name", "")
+				if not dev_name:
+					continue
+				
+				coverage = record.get("coverage") or []
+				# capacity可以从coverage（覆盖的停机位数量）推断，或使用默认值
+				# 对于固定设备，通常capacity等于覆盖的停机位数量，但这里简化处理
+				capacity = len(coverage) if isinstance(coverage, list) else 1
+				if capacity == 0:
+					capacity = 1  # 默认至少为1
+				
+				aircraft_names = [a for a in (record.get("aircraft_names") or []) if a]
+				is_occupied = bool(record.get("is_occupied", False))
+				is_reserved = bool(record.get("is_reserved", False))
+				
+				# 转换为设备ID列表（从飞机名称映射到ID）
+				in_use = []
+				for ac_name in aircraft_names:
+					ac_id = aircraft_map.get(ac_name)
+					if ac_id is not None:
+						in_use.append(ac_id)
+				
+				# 如果设备被占用或保留，或者有飞机在使用，则记录
+				if in_use or is_occupied or is_reserved or capacity > 0:
+					snapshot["devices"]["fixed"][dev_name] = {
+						"in_use": in_use,
+						"capacity": int(capacity)
+					}
+			
+			# 4. 提取设备状态（移动设备）
+			# 注意：MobileDevice节点可能同时有Device和MobileDevice标签
+			mobile_device_query = """
+			MATCH (d:Device:MobileDevice)
+			OPTIONAL MATCH (d)-[:INITIAL_AT]->(s:Stand)
+			OPTIONAL MATCH (a:Aircraft)-[:USING_DEVICE]->(d)
+			RETURN d.name AS name,
+			       s.name AS loc_stand,
+			       collect(DISTINCT a.name) AS aircraft_names
+			ORDER BY d.name
+			"""
+			
+			for record in sess.run(mobile_device_query):
+				dev_name = record.get("name", "")
+				if not dev_name:
+					continue
+				
+				loc_stand = record.get("loc_stand", "")
+				aircraft_names = [a for a in (record.get("aircraft_names") or []) if a]
+				
+				# 提取停机位编号
+				loc_stand_id = None
+				if loc_stand:
+					m = re.search(r"停机位(\d+)", str(loc_stand))
+					if m:
+						loc_stand_id = int(m.group(1))
+				
+				# 确定locked_by（正在使用的飞机ID）
+				locked_by = None
+				if aircraft_names:
+					ac_id = aircraft_map.get(aircraft_names[0])
+					if ac_id is not None:
+						locked_by = ac_id
+				
+				# 构建移动设备状态字典，只有当 loc_stand_id 不为 None 时才包含该字段
+				mobile_device_state = {
+					"busy_until_min": current_time_min + 10.0 if locked_by else current_time_min,  # 简化：默认10分钟后空闲
+					"locked_by": locked_by,
+					"speed_m_s": 3.0  # 默认速度
+				}
+				# 只有当 loc_stand_id 不为 None 时才添加该字段
+				if loc_stand_id is not None:
+					mobile_device_state["loc_stand"] = loc_stand_id
+				
+				snapshot["devices"]["mobile"][dev_name] = mobile_device_state
+			
+			# 5. 提取到达计划（从着陆事件推断）
+			# 查询尚未着陆的飞机（没有 HAS_CURRENT_GATE 关系但有计划着陆时间）
+			# arrival_plan 格式: {str(plane_id): arrival_time_min}（字符串键）
+			arrival_plan_query = """
+			MATCH (a:Aircraft)
+			WHERE NOT (a)-[:HAS_CURRENT_GATE]->(:Stand)
+			OPTIONAL MATCH (a)-[:HAS_TIME]->(t:Time)
+			OPTIONAL MATCH (a)-[:USES_RUNWAY]->(r:Runway)
+			WHERE r.name = "跑道Z"
+			RETURN a.name AS name, t.name AS time_str
+			ORDER BY a.name
+			"""
+			
+			for record in sess.run(arrival_plan_query):
+				ac_name = record.get("name", "")
+				time_str = record.get("time_str", "")
+				if not ac_name:
+					continue
+				
+				# 获取飞机ID
+				ac_id = aircraft_map.get(ac_name)
+				if ac_id is None:
+					continue
+				
+				# 尝试从时间字符串解析时间（分钟）
+				# 如果无法解析，则跳过
+				arrival_time = None
+				if time_str:
+					# 尝试解析时间字符串（格式可能是 "485.0" 或类似）
+					try:
+						arrival_time = float(time_str)
+					except (ValueError, TypeError):
+						# 如果无法解析为浮点数，尝试其他格式
+						pass
+				
+				# 如果找到了到达时间，添加到 arrival_plan
+				if arrival_time is not None:
+					snapshot["arrival_plan"][str(ac_id)] = float(arrival_time)
+			
+			# 6. 添加 disturbance_events 字段（从 blocked_stands 推断）
+			# 如果存在 blocked_stands，创建一个扰动事件
+			if snapshot["blocked_stands"]:
+				# 创建一个扰动事件，开始时间为当前时间，结束时间假设为当前时间+60分钟
+				# 实际应用中，应该从KG中提取扰动事件的起止时间
+				disturbance_event = {
+					"id": 0,
+					"start": float(current_time_min),
+					"end": float(current_time_min) + 60.0,  # 默认持续60分钟
+					"stands": snapshot["blocked_stands"].copy()
+				}
+				snapshot["disturbance_events"] = [disturbance_event]
+			else:
+				snapshot["disturbance_events"] = []
+			
+			# 注意：readme.md 示例中没有 site_unavailable 字段，因此不包含此字段
+		
+	except Exception as e:
+		# 发生错误时返回基础结构
+		import logging
+		logging.warning(f"[SNAPSHOT] KG查询失败: {e}")
+		pass
+	
+	# 创建反向映射：数字ID -> 原始名称
+	id_to_name_map = {plane_id: name for name, plane_id in aircraft_map.items()}
+	
+	return snapshot, id_to_name_map
+
+
 __all__ = [
 	"read_jsonl",
 	"save_jsonl",
 	"detect_resources_from_triples",
 	"build_samples_from_train_triples",
 	"build_decomposition_samples_from_events",
+	"detect_potential_conflict",
+	"generate_snapshot_from_kg",
 ]

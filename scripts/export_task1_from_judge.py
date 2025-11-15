@@ -3,8 +3,8 @@
 快速将 judge 流式输出（JSONL）转换为“任务一评分规则”格式的 JSON 文件。
 
 默认处理路径：
-- 源:   D:\\WorkSpace\\haitianbei\\results\\model_outputs\\judge\\stream_20251114_161400.jsonl
-- 目标: D:\\WorkSpace\\haitianbei\\results\\task1\\stream_20251114_161400.json
+- 源:   D:\\WorkSpace\\haitianbei\\results\\model_outputs\\judge\\stream_20251114_231005.jsonl
+- 目标: D:\\WorkSpace\\haitianbei\\results\\task1\\stream_20251114_231005.json
 
 可通过命令行参数自定义：
   python scripts/export_task1_from_judge.py --src <source_jsonl> --out <output_json>
@@ -36,7 +36,7 @@ def main():
             "results",
             "model_outputs",
             "judge",
-            "stream_20251114_161400.jsonl",
+            "stream_20251114_231005.jsonl",
         ),
         help="judge 阶段的 JSONL 源文件路径",
     )
@@ -48,7 +48,7 @@ def main():
             ROOT,
             "results",
             "task1",
-            "stream_20251114_161400.json",
+            "stream_20251114_231005.json",
         ),
         help="任务一结果输出 JSON 文件路径",
     )

@@ -55,6 +55,7 @@ def _canon_runway_token(tok: str) -> str:
 	- 去除空格与“号”字；
 	- 去除前缀“着陆跑道”；
 	- Z/z -> 跑道Z；纯数字 -> 跑道{数字}；已带“跑道”前缀则规范大小写；
+	- 起飞跑道Q1/Q2/Q3 -> 跑道29/30/31（根据技术资料，Q1对应29，Q2对应30，Q3对应31）；
 	- 空字符串或异常回退 -> 跑道Z。
 	"""
 	if tok is None:
@@ -65,6 +66,10 @@ def _canon_runway_token(tok: str) -> str:
 	if s.startswith("着陆跑道"):
 		s = s[len("着陆跑道"):]
 		s = s.strip()
+	# 去掉“起飞跑道”前缀
+	if s.startswith("起飞跑道"):
+		s = s[len("起飞跑道"):]
+		s = s.strip()
 	# 若还带有“跑道”前缀，去掉后按主体处理
 	if s.startswith("跑道"):
 		s = s[len("跑道"):]
@@ -73,12 +78,60 @@ def _canon_runway_token(tok: str) -> str:
 		return "跑道Z"
 	if s.upper() == "Z":
 		return "跑道Z"
+	# 起飞跑道映射：Q1->29, Q2->30, Q3->31
+	if s.upper() == "Q1":
+		return "跑道29"
+	if s.upper() == "Q2":
+		return "跑道30"
+	if s.upper() == "Q3":
+		return "跑道31"
 	if s.isdigit():
 		return f"跑道{s}"
 	# 兜底：若仍有“跑道X”形式，尽量保持
 	if tok.startswith("跑道") and len(tok) > 2:
 		return tok.replace(" ", "")
 	return "跑道Z"
+
+
+def _map_chinese_to_mobile_device(chinese_name: str) -> str | None:
+	"""将中文设备名称映射到移动设备编号。
+	
+	映射规则：
+	- "移动加氧车" -> MR02
+	- "移动加氮车" -> MR03
+	- "X号压缩空气终端" -> MR06-MR09（根据编号顺序：1号->MR06, 2号->MR07, 3号->MR08, 4号->MR09）
+	- "X号氧气终端" -> MR10-MR13（1号->MR10, 2号->MR11, 3号->MR12, 4号->MR13）
+	- "X号氮气终端" -> MR14-MR17（1号->MR14, 2号->MR15, 3号->MR16, 4号->MR17）
+	- "X号牵引车" -> MR18-MR27（1号->MR18, 2号->MR19, ..., 10号->MR27）
+	"""
+	name = str(chinese_name).strip()
+	
+	# 移动加氧车/加氮车（无编号）
+	if name == "移动加氧车":
+		return "MR02"
+	if name == "移动加氮车":
+		return "MR03"
+	
+	# 带编号的设备
+	m_num = re.match(r"(\d+)号(压缩空气终端|氧气终端|氮气终端|牵引车)", name)
+	if m_num:
+		num = int(m_num.group(1))
+		dev_type = m_num.group(2)
+		
+		if dev_type == "压缩空气终端":
+			if 1 <= num <= 4:
+				return f"MR{5 + num:02d}"  # MR06-MR09
+		elif dev_type == "氧气终端":
+			if 1 <= num <= 4:
+				return f"MR{9 + num:02d}"  # MR10-MR13
+		elif dev_type == "氮气终端":
+			if 1 <= num <= 4:
+				return f"MR{13 + num:02d}"  # MR14-MR17
+		elif dev_type == "牵引车":
+			if 1 <= num <= 10:
+				return f"MR{17 + num:02d}"  # MR18-MR27
+	
+	return None
 
 
 def extract_triples(text: str) -> List[Triple]:
@@ -159,8 +212,15 @@ def extract_triples(text: str) -> List[Triple]:
 	]
 
 	# 4) 跑道使用
-	# 例：使用着陆跑道Z / 使用跑道Z / 着陆跑道Z
-	_runway_raw = re.findall(r"使用?(?:着陆)?跑道\s*([A-Za-z0-9号]+)", text)
+	# 例：使用着陆跑道Z / 使用跑道Z / 着陆跑道Z / 起飞跑道Q1 / 到达起飞跑道Q1
+	# 匹配模式：使用(着陆|起飞)?跑道 / (着陆|起飞)?跑道 / 到达起飞跑道
+	_runway_raw = []
+	# 匹配"使用着陆跑道Z"、"使用起飞跑道Q1"、"着陆跑道Z"、"起飞跑道Q1"、"跑道Z"等
+	_runway_raw.extend(re.findall(r"(?:使用)?(?:着陆|起飞)?跑道\s*([A-Za-z0-9号]+)", text))
+	# 匹配"到达起飞跑道Q1"这种格式
+	_runway_raw.extend(re.findall(r"到达起飞跑道\s*([A-Za-z0-9号]+)", text))
+	# 去重
+	_runway_raw = list(set(_runway_raw))
 	runway_use = [_canon_runway_token(x) for x in _runway_raw]
 
 	# 5) 坐标
@@ -177,16 +237,25 @@ def extract_triples(text: str) -> List[Triple]:
 	# 示例：5号牵引车开始牵引飞机A001滑行至14号停机位
 	tug_trip_found = False
 	for tug_no, ac_id, gate_no in re.findall(r"(\d+号牵引车).*?牵引.*?飞机([A-Za-z0-9]+).*?(?:滑行至|滑至)\s*(\d+)号停机位", text):
-		_add(triples, seen, (tug_no, "牵引", f"飞机{ac_id}"))
-		_add(triples, seen, (tug_no, "滑至", f"{gate_no}号停机位"))
+		mapped_tug = _map_chinese_to_mobile_device(tug_no)
+		if mapped_tug:
+			_add(triples, seen, (mapped_tug, "牵引", f"飞机{ac_id}"))
+			_add(triples, seen, (mapped_tug, "滑至", f"{gate_no}号停机位"))
+		else:
+			_add(triples, seen, (tug_no, "牵引", f"飞机{ac_id}"))
+			_add(triples, seen, (tug_no, "滑至", f"{gate_no}号停机位"))
 		_add(triples, seen, (f"飞机{ac_id}", "滑至", f"{gate_no}号停机位"))
 		tug_trip_found = True
 
-	# 6.2) 若有“牵引车…速度X米/秒”或“滑行速度X米/秒”，把速度赋给牵引车与句中出现的具体飞机ID
+	# 6.2) 若有"牵引车…速度X米/秒"或"滑行速度X米/秒"，把速度赋给牵引车与句中出现的具体飞机ID
 	if speed:
 		m_tug_speed = re.search(r"(\d+号牵引车).*?(?:滑行速度|速度)\s*[0-9]+(?:\.[0-9]+)?\s*米/秒", text)
 		if m_tug_speed:
-			_add(triples, seen, (m_tug_speed.group(1), "速度", speed))
+			mapped_tug = _map_chinese_to_mobile_device(m_tug_speed.group(1))
+			if mapped_tug:
+				_add(triples, seen, (mapped_tug, "速度", speed))
+			else:
+				_add(triples, seen, (m_tug_speed.group(1), "速度", speed))
 			# 同步给出现的具体飞机ID（若文本中有多架，全部赋值）
 			for ac in aircraft_ids:
 				_add(triples, seen, (ac, "速度", speed))
@@ -194,24 +263,40 @@ def extract_triples(text: str) -> List[Triple]:
 	# 7) 牵引车待命位置
 	# 例：系统检测到5号牵引车待命于着陆跑道Z / 着陆跑道
 	for veh_no, loc in re.findall(r"(\d+号牵引车).*?待命于(着陆跑道\s*[A-Za-z0-9号]?)", text):
-		_add(triples, seen, (veh_no, "待命位置", _canon_runway_token(loc)))
+		mapped_tug = _map_chinese_to_mobile_device(veh_no)
+		if mapped_tug:
+			_add(triples, seen, (mapped_tug, "待命位置", _canon_runway_token(loc)))
+		else:
+			_add(triples, seen, (veh_no, "待命位置", _canon_runway_token(loc)))
 
 	# 7.1) 牵引车释放连接（显式记录为设备动作，便于可视化与审计）
 	# 例：5号牵引车释放连接。
 	for veh_no in re.findall(r"(\d+号牵引车).*?释放连接", text):
-		_add(triples, seen, (veh_no, "动作", "释放连接"))
+		mapped_tug = _map_chinese_to_mobile_device(veh_no)
+		if mapped_tug:
+			_add(triples, seen, (mapped_tug, "动作", "释放连接"))
+		else:
+			_add(triples, seen, (veh_no, "动作", "释放连接"))
 
 	# 8) 设备到达停机位（移动加氧车/移动加氮车/压缩空气终端/氧气终端/氮气终端 等）
 	for device, gate in re.findall(r"((?:\d+号)?(?:移动)?(?:加氧车|加氮车|压缩空气终端|氧气终端|氮气终端))到达(\d+)号停机位", text):
-		_add(triples, seen, (device, "到达停机位", f"{gate}号"))
+		mapped_dev = _map_chinese_to_mobile_device(device)
+		if mapped_dev:
+			_add(triples, seen, (mapped_dev, "到达停机位", f"{gate}号"))
+		else:
+			_add(triples, seen, (device, "到达停机位", f"{gate}号"))
 
 	# 8.1) 设备释放（飞机或系统释放移动/终端设备）
 	# 示例：A001释放移动加氧车/加氮车；A001释放2号压缩空气终端
 	if re.search(r"释放移动加氧车/加氮车", text):
-		_add(triples, seen, ("移动加氧车", "动作", "释放"))
-		_add(triples, seen, ("移动加氮车", "动作", "释放"))
+		_add(triples, seen, ("MR02", "动作", "释放"))
+		_add(triples, seen, ("MR03", "动作", "释放"))
 	for dev in re.findall(r"释放\s*((?:\d+号)?(?:移动)?(?:加氧车|加氮车|压缩空气终端|氧气终端|氮气终端))", text):
-		_add(triples, seen, (dev, "动作", "释放"))
+		mapped_dev = _map_chinese_to_mobile_device(dev)
+		if mapped_dev:
+			_add(triples, seen, (mapped_dev, "动作", "释放"))
+		else:
+			_add(triples, seen, (dev, "动作", "释放"))
 
 	# 9) 分配停机位 -> 飞机
 	for gate, ac_id in re.findall(r"分配(\d+)号停机位给飞机([A-Za-z0-9]+)", text):
@@ -220,8 +305,13 @@ def extract_triples(text: str) -> List[Triple]:
 	# 8.2) 移动设备调度（与飞机无关，应在飞机循环外抽取）
 	# 示例：调度移动加氧车从14号停机位前往7号停机位(距离208.8米，预计70秒)
 	for dev, src_gate, dst_gate in re.findall(r"(移动加氧车|移动加氮车|\d+号压缩空气终端|\d+号氧气终端|\d+号氮气终端)从(\d+)号停机位前往(\d+)号停机位", text):
-		_add(triples, seen, (dev, "滑至", f"{dst_gate}号停机位"))
-		_add(triples, seen, (dev, "到达停机位", f"{dst_gate}号"))
+		mapped_dev = _map_chinese_to_mobile_device(dev)
+		if mapped_dev:
+			_add(triples, seen, (mapped_dev, "滑至", f"{dst_gate}号停机位"))
+			_add(triples, seen, (mapped_dev, "到达停机位", f"{dst_gate}号"))
+		else:
+			_add(triples, seen, (dev, "滑至", f"{dst_gate}号停机位"))
+			_add(triples, seen, (dev, "到达停机位", f"{dst_gate}号"))
 
 	# 将“动作/跑道/坐标/速度/时间”赋予到每一架匹配到的飞机；若无飞机但存在动作等，则跳过与飞机绑定的项
 	for ac in aircraft_ids:
@@ -313,6 +403,28 @@ def extract_triples(text: str) -> List[Triple]:
 			# 1->0, 2->1 ... 超出映射长度则取最后一个
 			fr_code = arr[min(max(idx - 1, 0), len(arr) - 1)]
 			_add(triples, seen, (ac, "使用设备", fr_code))
+		
+		# 设备使用抽取：处理移动设备（移动加氧车、移动加氮车、X号压缩空气终端等）
+		# 匹配模式：使用2号供氮站和移动加氮车 / 使用2号供气站和2号压缩空气终端
+		# 注意：这里只处理移动设备部分，固定设备已在上面处理
+		# 匹配"使用...和移动加氧车"、"使用...和移动加氮车"、"使用...和2号压缩空气终端"等
+		use_segment = re.search(r"使用([^；。]*)", text)
+		if use_segment:
+			segment = use_segment.group(1)
+			# 切分"和/、/,"
+			tokens = re.split(r"[和、,，]\s*", segment)
+			for tk in tokens:
+				tk = tk.strip()
+				if not tk:
+					continue
+				# 检查是否是移动设备（移动加氧车、移动加氮车、X号压缩空气终端等）
+				if re.search(r"(?:移动)?(?:加氧车|加氮车)|(?:\d+号)?(?:压缩空气终端|氧气终端|氮气终端)", tk):
+					mapped_dev = _map_chinese_to_mobile_device(tk)
+					if mapped_dev:
+						_add(triples, seen, (ac, "使用设备", mapped_dev))
+					else:
+						# 如果无法映射，仍然添加原始名称（兼容性）
+						_add(triples, seen, (ac, "使用设备", tk))
 
 		# （已前移到飞机循环外）
 

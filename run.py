@@ -57,7 +57,7 @@ def main():
 
     # 模型相关
     # 默认使用可由 Transformers 直接加载的检查点目录（非 GGUF）
-    parser.add_argument("--base_model_dir", default=os.path.join(default_root, "models", "Qwen2_5-14B-Instruct"),
+    parser.add_argument("--base_model_dir", default=os.path.join(default_root, "models", "GLM-4-9B-0414"),
                         help="底座模型目录（Transformers 可加载，非 GGUF）")
     parser.add_argument("--lora_out_dir", default=os.path.join(default_root, "results_entity_judge", "lora"),
                         help="LoRA 训练输出目录")
@@ -88,7 +88,7 @@ def main():
     parser.add_argument("--log_steps", type=int, default=1, help="每多少个优化步打印一次训练日志（越小越详细）")
     parser.add_argument("--use_4bit", action="store_true", default=False, help="开启4bit量化（Windows 常不建议）")
     parser.add_argument("--no_fp16", action="store_true", default=False, help="关闭fp16，改用bf16/float32")
-    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto", help="训练设备优先级：auto/cuda/cpu")
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="cuda", help="训练设备优先级：auto/cuda/cpu")
     # 推理控制
     parser.add_argument("--generate_timeout_sec", type=float, default=120.0, help="单条生成超时（秒），避免长时间卡住")
     parser.add_argument("--cpu_max_new_tokens", type=int, default=256, help="CPU 推理下的最大生成 token 数上限")

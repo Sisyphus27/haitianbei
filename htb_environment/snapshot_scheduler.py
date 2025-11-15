@@ -176,7 +176,10 @@ def _apply_device_snapshot(env: ScheduleEnv, device_state: Optional[Dict[str, An
         if dev is None:
             continue
         if "loc_stand" in payload:
-            dev.loc_stand = int(payload["loc_stand"])
+            loc_stand = payload["loc_stand"]
+            # 处理 None 值：如果为 None，跳过设置（保持设备当前状态）
+            if loc_stand is not None:
+                dev.loc_stand = int(loc_stand)
         if "busy_until_min" in payload:
             dev.busy_until_min = float(payload["busy_until_min"])
         if "locked_by" in payload:

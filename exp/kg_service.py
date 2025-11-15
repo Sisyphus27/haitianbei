@@ -42,6 +42,7 @@ class KGServiceLocal:
     def get_context_text(self, *, focus_entities: Optional[List[str]] = None, limit: int = 200) -> str:
         """
         返回可读 KG 上下文文本，尽量复用缓存，结构与原 _kg_text_context 一致。
+        优化：减少查询次数，限制返回信息量。
         """
         key = self._make_key(focus_entities, limit)
         now = time.time()
@@ -61,20 +62,19 @@ class KGServiceLocal:
                 return
             seen.add(txt)
             lines.append(txt)
+            # 提前停止：达到limit就返回
+            if len(lines) >= limit:
+                return
 
-        # 属性谓词集合，用于补充节点属性到上下文
-        prop_meta = getattr(self.kg, "PREDICATE_MAP", {}) if hasattr(self.kg, "PREDICATE_MAP") else {}
-        prop_predicates = {
-            key
-            for key, meta in prop_meta.items()
-            if isinstance(meta, dict) and meta.get("type") == "prop"
-        }
-
-        limit_int = max(1, int(limit))
+        # 优化：减少limit，提升速度
+        limit_int = max(1, min(int(limit), 100))  # 最多100条信息
 
         try:
             if focus_entities:
-                for ent in focus_entities:
+                # 只处理前5个实体，避免过多查询
+                for ent in focus_entities[:5]:
+                    if len(lines) >= limit_int:
+                        break
                     ent_name = str(ent).strip()
                     if not ent_name:
                         continue
@@ -85,26 +85,17 @@ class KGServiceLocal:
 
                     out_edges = nb.get("out") or []
                     in_edges = nb.get("in") or []
-                    # 为入/出边与属性预留配额，避免单类信息占满上下文
-                    per_direction_cap = max(1, limit_int // 3)
+                    # 大幅减少每条实体的边数量
+                    per_direction_cap = max(1, limit_int // (len(focus_entities[:5]) * 2 + 1))
                     for s, p, o in out_edges[:per_direction_cap]:
                         _push(f"{s} -[{p}]-> {o}")
+                        if len(lines) >= limit_int:
+                            break
                     for s, p, o in in_edges[:per_direction_cap]:
                         _push(f"{s} -[{p}]-> {o}")
-
-                    if prop_predicates and hasattr(self.kg, "query"):
-                        try:
-                            triples = self.kg.query(ent_name) or []
-                        except Exception:
-                            triples = []
-                        attr_cap = max(1, limit_int // 3)
-                        attr_count = 0
-                        for _, predicate, obj in triples:
-                            if predicate in prop_predicates and obj:
-                                _push(f"{ent_name} 的{predicate}: {obj}")
-                                attr_count += 1
-                            if attr_count >= attr_cap:
-                                break
+                        if len(lines) >= limit_int:
+                            break
+                    # 跳过属性查询（减少耗时）
             else:
                 snap = self.kg.graph_snapshot()
                 _push(
@@ -209,11 +200,16 @@ class KGServiceLocal:
             except Exception:
                 pass
 
-    def release_device(self, device_name: str) -> None:
-        """释放设备占用。"""
+    def release_device(self, device_name: str, *, aircraft: str | None = None) -> None:
+        """释放设备占用。
+        
+        参数:
+        - device_name: 设备名称
+        - aircraft: 可选，指定释放该设备的飞机；如果为None，则释放所有飞机对该设备的使用
+        """
         if hasattr(self.kg, "release_device"):
             try:
-                self.kg.release_device(device_name)
+                self.kg.release_device(device_name, aircraft=aircraft)
             except Exception:
                 pass
 
@@ -231,3 +227,12 @@ class KGServiceLocal:
                 self.kg.release_runway(runway_name)
             except Exception:
                 pass
+
+    def cleanup_isolated_nodes(self) -> int:
+        """清理不连通的节点（如时间节点），但保留必要的节点类型。"""
+        if hasattr(self.kg, "cleanup_isolated_nodes"):
+            try:
+                return self.kg.cleanup_isolated_nodes()
+            except Exception:
+                return 0
+        return 0
