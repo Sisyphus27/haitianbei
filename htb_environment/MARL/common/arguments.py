@@ -77,7 +77,10 @@ def get_common_args():
     # 快照调度
     parser.add_argument('--snapshot_json', type=str, default='',
                         help='若提供 JSON 文件路径或 JSON 字符串，则跳过训练/评估，直接基于快照推理后续调度计划')
-
+    parser.add_argument('--snapshot_use_agent', action='store_true', default=False,
+                        help='在快照模式下使用 MARL agent 的决策流程（可与 --load_model 一起使用以加载训练模型）')
+    parser.add_argument('--snapshot_mode', action='store_true', default=False,
+                        help='在快照模式下使用 MARL agent 的决策流程（可与 --load_model 一起使用以加载训练模型）')
     args = parser.parse_args()
     return args
 

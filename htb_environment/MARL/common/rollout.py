@@ -24,7 +24,7 @@ class RolloutWorker:
                 os.makedirs(self.save_path)
         print('Init RolloutWorker')
 
-    def generate_episode(self, episode_num=None, evaluate=False):
+    def generate_episode(self, episode_num=None, evaluate=False, skip_reset: bool = False):
         """
         返回:
           episode, episode_reward, info["time"], win_tag, for_gantt, move_time, for_devices
@@ -32,7 +32,9 @@ class RolloutWorker:
         """
         # 开始收集与环境交互的情况
         o, u, r, s, avail_u, u_onehot, terminate, padded = [], [], [], [], [], [], [], []
-        self.env.reset(self.n_agents)
+        # Optionally skip env.reset to allow starting from an externally restored state
+        if not skip_reset:
+            self.env.reset(self.n_agents)
         terminated = False
         win_tag = False
         step = 0

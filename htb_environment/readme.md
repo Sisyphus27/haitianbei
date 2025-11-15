@@ -33,8 +33,7 @@ python main.py --learn False --load_model True --n_agents 60 --batch_mode --batc
 示例：
 
 ```bash
-python main.py --learn False --load_model False --n_agents 12 --batch_mode --batch_size_per_batch 12 --batches_count 1 --intra_gap_min 2 --batch_start_time_min 420 \
-  --enable_disturbance --disturbance_events "[{\"start\":450,\"end\":550,\"stands\":\"5-10\"}]"
+python main.py --learn False --load_model False --n_agents 12 --batch_mode --batch_size_per_batch 12 --batches_count 1 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --evaluate_epoch 1 --result_name disturbance_test --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":"5-10"}]'
 ```
 
 上述命令会在 450~550 分钟内封锁 5~10 号停机位，被迫停止保障的飞机会记录剩余作业进度并在新站位继续未完成的作业，事件结束后自动恢复站位可用性。
@@ -55,6 +54,16 @@ python main.py --learn False --load_model False --n_agents 12 --batch_mode --bat
   `FixedDevice` 记录 `in_use`、`capacity`，`MobileDevice` 记录 `loc_stand`、`busy_until_min`、`locked_by`；`_alloc_resources_for_job` 依据这些状态分配资源。
 - **快照**（`environment.py:834-905`）  
   `_capture_global_state` 输出 `{"time", "planes", "stand_occupancy", "blocked_stands", ...}`，是与外部项目互通的统一字段格式。
+
+#### 1.1 必填 / 可选字段说明
+
+- **必填**：
+  - `planes`（至少提供 `plane_id`、`status` 和 `current_site_id`）。快照恢复时会根据 `current_site_id` 自动回填站位坐标与占用情况。
+  - 扰动重放场景建议提供 `disturbance_events`（含 `start`/`end`/`stands`），这样快照和多批次模式都会复用相同的扰动注入逻辑（强制迁移、封控等）。
+- **自动推断**：
+  - 若 `finished_codes` 为空，调度器会依据当前 `active_job`/`paused_jobs` 及其前驱依赖补全；与当前作业可并行且未写入的依赖作业默认视为已完成。
+  - `position` 缺省或为占位值（如 `[0, 0]`）时，会自动取停机位坐标。
+- **可选**：`stand_occupancy`（若提供则作为校验，缺省时会从飞机位置汇总）、`time`、`arrival_plan`、`devices`、`site_unavailable`、`blocked_stands`（额外封控）等增强信息按需提供即可。
 
 ### 2. 快照 JSON 示例
 
@@ -106,61 +115,17 @@ python main.py --learn False --load_model False --n_agents 12 --batch_mode --bat
 
 ### 4. 快照调度模式
 
-#### 4.1 通过 main.py
+#### 通过 main.py
 
 `main.py` 新增 `--snapshot_json` 参数（文件路径或 JSON 字符串）。示例：
 
 ```bash
-python main.py --snapshot_json my_snapshot.json --result_name snapshot_run
+python main.py --snapshot_json my_snapshot.json --result_name snapshot_run --enable_disturbance --learn False --evaluate_epoch 1 2>&1 | Select-Object -Last 30
 ```
 
 - 程序会跳过训练/评估，直接调用 `snapshot_scheduler` 继续推理。
 - 结果写入 `result/<result_name>/snapshot/snapshot_YYYYmmdd_HHMMSS.json`，其中包含 `time`、`reward`、`episodes_situation`、`devices_situation` 以及扰动信息。
 - 其它参数（如 `--enable_disturbance`、`--batch_mode`）仍可设置，用于控制环境行为。
-
-#### 4.2 直接调用 snapshot_scheduler
-
-```bash
-python - <<'PY'
-import json
-from argparse import Namespace
-from snapshot_scheduler import infer_schedule_from_snapshot
-
-with open("my_snapshot.json", "r", encoding="utf-8") as f:
-    snapshot = json.load(f)
-
-args = Namespace(
-    n_agents=len(snapshot["planes"]),
-    batch_mode=False,
-    arrival_gap_min=2,
-    result_dir="result",
-    result_name="manual",
-    alg="qmix",
-    n_actions=0, state_shape=0, obs_shape=0, episode_limit=1000
-)
-
-info = infer_schedule_from_snapshot(args, snapshot)
-print("makespan:", info["time"])
-print("调度事件数:", len(info["episodes_situation"]))
-PY
-```
-
-#### 4.3 手动策略
-
-```python
-from snapshot_scheduler import restore_env_from_snapshot
-from environment import ScheduleEnv
-
-env = ScheduleEnv(args)
-env.reset(args.n_agents)
-restore_env_from_snapshot(env, snapshot)
-
-while True:
-    actions = my_policy(env)
-    reward, terminated, info = env.step(actions)
-    if terminated:
-        break
-```
 
 ### 5. 调度推理流程回顾
 
@@ -177,4 +142,3 @@ while True:
 - `infer_schedule_from_snapshot(args, snapshot, policy_fn=None, max_steps=None)`：重置环境、注入快照、循环调用 `policy_fn`（默认 `greedy_idle_policy`），返回最后一次 `env.step` 的 `info` 用于生成新的调度计划。
 
 结合 `--snapshot_json` 或自定义策略，即可把任意时间点的状态导入系统，在不重新训练的情况下完成一次完整的后续调度推理。
-

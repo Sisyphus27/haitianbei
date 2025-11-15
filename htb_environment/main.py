@@ -1,19 +1,24 @@
-﻿import os
+﻿from datetime import datetime
+import json
+import copy
+from snapshot_scheduler import (
+    infer_schedule_from_snapshot,
+    restore_env_from_snapshot,
+    summarize_plane_completion,
+)
+from utils.knowledgeGraph_test import KGPrior
+from utils.PDRs.shortestDistence import SDrules
+from MARL.common.arguments import get_common_args, get_mixer_args
+from MARL.runner import Runner
+import sys
+from environment import ScheduleEnv
+import pickle
+import numpy as np
+import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-import numpy as np
-import pickle
-from environment import ScheduleEnv
-import sys
 # from os.path import dirname, abspath
 # sys.path.append(dirname(dirname(abspath(__file__))))
-from MARL.runner import Runner
-from MARL.common.arguments import get_common_args, get_mixer_args
-from utils.PDRs.shortestDistence import SDrules
-from utils.knowledgeGraph_test import KGPrior
-from snapshot_scheduler import infer_schedule_from_snapshot
-import json
-from datetime import datetime
 
 np.random.seed(2)
 
@@ -38,6 +43,46 @@ def _jsonify_events(events):
     return out
 
 
+def _dump_snapshot_result(args, snapshot, info):
+    result_dir = getattr(args, "result_dir", "result")
+    alg = getattr(args, "alg", "snapshot")
+    n_agents = getattr(args, "n_agents", len(snapshot.get("planes") or []))
+    result_name = getattr(args, "result_name", "snapshot")
+    out_dir = os.path.join(result_dir, alg,
+                           f"{n_agents}_agents", result_name, "snapshot")
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def _scalar(value):
+        try:
+            import numpy as np
+            if isinstance(value, (np.integer, np.floating)):
+                return value.item()
+        except Exception:
+            pass
+        return value
+
+    payload = {
+        "input_snapshot": snapshot,
+        "result": {
+            "reward": _scalar(info.get("reward")),
+            "time": _scalar(info.get("time")),
+            "win_rate": _scalar(info.get("win_rate")),
+            "move_time": _scalar(info.get("move_time")),
+            "episodes_situation": _jsonify_events(info.get("episodes_situation")),
+            "devices_situation": info.get("devices_situation") or [],
+            "completion": info.get("completion")
+        }
+    }
+    if "disturbance" in info:
+        payload["result"]["disturbance"] = info["disturbance"]
+
+    out_path = os.path.join(out_dir, f"snapshot_{stamp}.json")
+    with open(out_path, "w", encoding="utf-8") as fp:
+        json.dump(payload, fp, ensure_ascii=False, indent=2)
+    return out_path
+
+
 def _maybe_run_snapshot_mode(args) -> bool:
     spec = getattr(args, "snapshot_json", "")
     if not spec:
@@ -52,24 +97,56 @@ def _maybe_run_snapshot_mode(args) -> bool:
         sys.exit(1)
     if snapshot.get("planes"):
         args.n_agents = len(snapshot["planes"])
-    info = infer_schedule_from_snapshot(args, snapshot)
-    result = {
-        "time": info.get("time"),
-        "reward": info.get("reward"),
-        "episodes_situation": _jsonify_events(info.get("episodes_situation")),
-        "devices_situation": info.get("devices_situation", []),
+
+    # 创建环境并从快照恢复状态
+    env = ScheduleEnv(args)
+    env.reset(args.n_agents)
+    restore_env_from_snapshot(env, snapshot)
+
+    # 挂载先验（如果启用）
+    if args.use_prior:
+        prior = KGPrior(ds=args.prior_dim_site, dp=args.prior_dim_plane)
+        env.attach_prior(prior, args.prior_dim_site, args.prior_dim_plane)
+
+    env_info = env.get_env_info()
+    args.n_actions = env_info["n_actions"]
+    args.state_shape = env_info["state_shape"]
+    args.obs_shape = env_info["obs_shape"]
+    args.episode_limit = env_info["episode_limit"]
+    args = get_mixer_args(args)
+
+    # 使用 Runner 进行评估（生成甘特/plan_eval 等与批次流程一致）
+    runner = Runner(env, args)
+    win_rate, reward, makespan, move_time = runner.evaluate_from_snapshot()
+    episodes = runner.results.get("schedule_results", [])
+    devices = runner.results.get("devices_results", [])
+    last_schedule = episodes[-1] if episodes else []
+    last_devices = devices[-1] if devices else []
+    completion = summarize_plane_completion(env)
+    summary = {
+        "reward": reward,
+        "time": makespan,
+        "win_rate": win_rate,
+        "episodes_situation": last_schedule,
+        "devices_situation": last_devices or [],
+        "move_time": move_time,
+        "completion": completion
     }
-    if "disturbance" in info:
-        result["disturbance"] = info["disturbance"]
-    base_dir = os.path.join(args.result_dir, str(getattr(args, "result_name", "snapshot")))
-    out_dir = os.path.join(base_dir, "snapshot")
-    os.makedirs(out_dir, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(out_dir, f"snapshot_{stamp}.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=4)
-    t = result.get("time") or 0.0
-    print(f"[Snapshot] Finished snapshot rollout, makespan={t:.2f} min, output={out_path}")
+    if env.enable_disturbance:
+        summary["disturbance"] = {
+            "active_stands": sorted(env.disturbance_blocked_stands),
+            "history": copy.deepcopy(env.disturbance_history)
+        }
+
+    out_path = _dump_snapshot_result(args, snapshot, summary)
+    episodes_cnt = len(last_schedule or [])
+    print('[Snapshot] Finished snapshot evaluation, win_rate: {}, reward: {}, makespan: {}, events: {}, saved: {}'.format(
+        win_rate, reward, makespan, episodes_cnt, out_path))
+    if completion.get("unfinished"):
+        unfinished_ids = [entry["plane_id"]
+                          for entry in completion["unfinished"]]
+        print("[Snapshot] WARNING: unfinished planes detected: {}".format(
+            unfinished_ids))
     return True
 
 
@@ -85,7 +162,6 @@ def marl_agent_wrapper():
     if getattr(args, 'batch_mode', False):
         args.learn = False
         args.load_model = False
-
     # 先构造带 args 的环境
     env = ScheduleEnv(args)
 

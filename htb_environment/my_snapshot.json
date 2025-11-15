@@ -1,0 +1,72 @@
+{
+  "time": 485.0,
+  "planes": [
+    {
+      "plane_id": 0,
+      "status": "PROCESSING",
+      "current_site_id": 5,
+      "active_job": "ZY02",
+      "active_remaining": { "ZY02": 1.5 }
+    },
+    {
+      "plane_id": 1,
+      "status": "PROCESSING",
+      "current_site_id": 6,
+      "active_job": "ZY03",
+      "active_remaining": { "ZY03": 2.0 }
+    },
+    {
+      "plane_id": 2,
+      "status": "PROCESSING",
+      "current_site_id": 7,
+      "active_job": "ZY04",
+      "active_remaining": { "ZY04": 2.8 }
+    },
+    {
+      "plane_id": 3,
+      "status": "PROCESSING",
+      "current_site_id": 8,
+      "active_job": "ZY05",
+      "active_remaining": { "ZY05": 2.2 }
+    },
+    {
+      "plane_id": 4,
+      "status": "IDLE",
+      "current_site_id": 9,
+      "paused_jobs": [
+        { "code": "ZY06", "remaining": 1.0 }
+      ]
+    },
+    {
+      "plane_id": 5,
+      "status": "IDLE",
+      "current_site_id": 10
+    },
+    {
+      "plane_id": 6,
+      "status": "IDLE"
+    },
+    {
+      "plane_id": 7,
+      "status": "IDLE"
+    }
+  ],
+  "blocked_stands": [5,6,7,8,9],
+  "arrival_plan": { "6": 500.0, "7": 505.0 },
+  "devices": {
+    "fixed": {
+      "FR5": { "in_use": [2], "capacity": 2 }
+    },
+    "mobile": {
+      "MR05": {
+        "loc_stand": 7,
+        "busy_until_min": 492.0,
+        "locked_by": 2,
+        "speed_m_s": 3.0
+      }
+    }
+  },
+  "disturbance_events": [
+    { "id": 0, "start": 500.0, "end": 540.0, "stands": [5,6,7,8,9] }
+  ]
+}

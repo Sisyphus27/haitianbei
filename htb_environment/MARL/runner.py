@@ -209,3 +209,57 @@ class Runner:
                 "devices_results", [None])[-1],
                 filename=f"schedule_{stamp}.csv")
         return win_rate, reward, time, move_time
+
+    def evaluate_from_snapshot(self):
+        """
+        从已恢复的快照环境进行评估（不重置环境）。
+        与 evaluate() 流程一致，但调用 generate_episode(skip_reset=True)。
+        """
+        file_path = os.path.join(self.save_path, "evaluate.json")
+        plan_path = os.path.join(self.save_path, "plan_eval.json")
+
+        win_number = 0
+        reward = 0
+        time = 0
+        move_time = 0
+        for epoch in range(self.args.evaluate_epoch):
+            _, episode_reward, episode_time, win_tag, for_gant, episode_move_time, for_devices = self.rolloutWorker.generate_episode(
+                epoch, evaluate=True, skip_reset=True)
+            self.results['evaluate_reward'].append(episode_reward)
+            self.results['evaluate_makespan'].append(episode_time)
+            self.results['evaluate_move_time'].append(episode_move_time)
+            self.results['schedule_results'].append(for_gant)
+            self.results['devices_results'].append(for_devices)
+            reward += episode_reward
+            time += episode_time
+            move_time += episode_move_time
+            if win_tag:
+                win_number += 1
+
+        win_rate = win_number / self.args.evaluate_epoch
+        reward = reward / self.args.evaluate_epoch
+        time = time / self.args.evaluate_epoch
+        move_time = move_time / self.args.evaluate_epoch
+        self.results['average_reward'].append(reward)
+        self.results['average_makespan'].append(time)
+        self.results['average_move_time'].append(move_time)
+        self.results['win_rates'].append(win_rate)
+
+        # 保存 evaluate.json + plan_eval.json（与 evaluate() 相同）
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(self.results, f, indent=4, cls=NumpyEncoder)
+        try:
+            move_jid = int(self.env.jobs_obj.code2id().get("ZY_M", 1))
+        except Exception:
+            move_jid = 1
+        convert_schedule_with_fixed_logic(
+            file_path, plan_path, self.args.n_agents, move_job_id=move_jid, batch_size_per_batch=getattr(self.args, 'batch_size_per_batch', None))
+
+        # 可选导出 CSV（取最后一组）
+        if getattr(self.args, "export_csv", True) and len(self.results["schedule_results"]) > 0:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.export_schedule_csv(self.results["schedule_results"][-1],
+                                     self.results.get(
+                "devices_results", [None])[-1],
+                filename=f"schedule_{stamp}.csv")
+        return win_rate, reward, time, move_time
