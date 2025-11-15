@@ -1,11 +1,29 @@
 # schedule_converter.py
-# 从 info.json 选出“最佳”一组 episodes_situation，生成 plan.json，并绘制甘特图与训练曲线
+# 从 info.json 选出"最佳"一组 episodes_situation，生成 plan.json，并绘制甘特图与训练曲线
 import json
-import os, numpy as np
+import os
+import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 import matplotlib.pyplot as plt
 
 # --------- 公共工具 ---------
+
+
+def _minutes_to_time_str(minutes: float) -> str:
+    """将分钟时间转换为 HH:MM:SS 格式
+
+    Args:
+        minutes: 从午夜（00:00）算起的分钟数，例如 420 = 7:00 AM
+
+    Returns:
+        格式为 "HH:MM:SS" 的时间字符串
+    """
+    # 确保分钟在合理范围内（0-1440 为一天）
+    total_minutes = float(minutes) % 1440
+    hours = int(total_minutes // 60)
+    mins = int(total_minutes % 60)
+    secs = int((total_minutes % 1) * 60)
+    return f"{hours:02d}:{mins:02d}:{secs:02d}"
 
 
 def _ensure_dir(path: str):
@@ -88,11 +106,12 @@ def _attach_devices_to_plan(plan, episodes, devices):
 
 
 def convert_schedule_with_fixed_logic(info_json_path: str,
-                                    plan_json_path: str,
-                                    n_agent: int,
-                                    out_dir: Optional[str] = None,
-                                    also_plot: bool = True,
-                                    move_job_id: int = 1):
+                                      plan_json_path: str,
+                                      n_agent: int,
+                                      out_dir: Optional[str] = None,
+                                      also_plot: bool = True,
+                                      move_job_id: int = 1,
+                                      batch_size_per_batch: Optional[int] = None):
     """读取 info.json，选出“最佳”一组，生成 plan.json，并绘图（甘特 + 训练曲线）
     - out_dir 为空时，与 plan_json_path 同目录
     """
@@ -111,8 +130,8 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
     def _key(e):
         t, jid, _, pid, _, _ = e
         # 移动作业排在前面（相同时刻同飞机）
-        return(float(t), 0 if int(jid) == int(move_job_id) else 1, int(pid))
-    
+        return (float(t), 0 if int(jid) == int(move_job_id) else 1, int(pid))
+
     episodes_sorted = sorted(episodes, key=_key)
     # per-plane 上一次 End_Site
     last_end: Dict[int, int] = {}
@@ -120,13 +139,14 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
     for t, jid, end_site, pid, pmin, mmin in episodes_sorted:
         start_site = last_end.get(int(pid), int(end_site))
         row = dict(
-            Time=float(t),
+            Time=_minutes_to_time_str(t),  # 用 HH:MM:SS 格式替代分钟数
             Plane_ID=int(pid),
             Start_Site=int(start_site),
             End_Site=int(end_site),
             Job_ID=int(jid),
             process_time=float(pmin),
             move_time=float(mmin),
+            _time_minutes=float(t),  # 内部字段用于绘图，不会显示在 JSON 中
         )
         plan.append(row)
         last_end[int(pid)] = int(end_site)
@@ -134,16 +154,28 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
     # 注入设备信息（若 info.json 提供）
     _attach_devices_to_plan(plan, episodes_sorted, devices)
 
-    with open(plan_json_path, "w", encoding="utf-8") as f:
-        json.dump({"plan": plan, "selected_group_index": best_idx, "criterion": criterion},
-                f, ensure_ascii=False, indent=4)
+    # 保存 JSON 前，提取 _time_minutes 字段用于绘图，然后清除
+    plan_for_json = []
+    for row in plan:
+        row_copy = dict(row)
+        row_copy.pop('_time_minutes', None)  # 移除内部字段
+        plan_for_json.append(row_copy)
 
-    # 4) 绘图
+    with open(plan_json_path, "w", encoding="utf-8") as f:
+        json.dump({"plan": plan_for_json, "selected_group_index": best_idx, "criterion": criterion},
+                  f, ensure_ascii=False, indent=4)
+
+    # 4) 绘图（使用原始 plan，包含 _time_minutes）
     if also_plot:
         try:
             _plot_gantt(plan, os.path.join(out_dir, "gantt.png"))
-            _plot_metrics(info, out_dir, best_idx)
-            _plot_makespan_progress(info, out_dir)
+            # 额外输出：停机位使用情况甘特图（按飞机/批次着色，并显示图例）
+            try:
+                _plot_stand_usage(plan, os.path.join(
+                    out_dir, "gantt_stand_usage.png"), batch_size_per_batch=batch_size_per_batch)
+            except Exception:
+                pass
+            # 不再输出训练/评估曲线图（evaluate_span / evaluate_metrics），按用户要求去掉
         except Exception as e:
             print(f"[schedule_converter] plotting failed: {e}")
 
@@ -169,7 +201,8 @@ def _plot_gantt(plan: List[Dict[str, Any]], png_path: str):
     for row in plan:
         by_plane.setdefault(int(row["Plane_ID"]), []).append(row)
     for lst in by_plane.values():
-        lst.sort(key=lambda r: r["Time"])
+        # 按 _time_minutes（用于绘图的内部分钟字段）或 Time（兼容性）排序
+        lst.sort(key=lambda r: r.get("_time_minutes", r.get("Time", 0)))
 
     fig = plt.figure(figsize=(12, max(4, len(by_plane)*0.6)))
     ax = plt.gca()
@@ -178,16 +211,20 @@ def _plot_gantt(plan: List[Dict[str, Any]], png_path: str):
     for pid in sorted(by_plane.keys()):
         seq = by_plane[pid]
         for r in seq:
-            t0 = r["Time"]
+            # 使用 _time_minutes（如果有）作为绘图的时间基准
+            t0 = r.get("_time_minutes", None)
+            if t0 is None:
+                # 兼容性：如果没有 _time_minutes，尝试从 Time 解析或跳过
+                continue
             # 移动段（若 move_time > 0）画为浅色边框
             if r["move_time"] > 0:
                 ax.broken_barh([(t0, r["move_time"])], (y-0.35, 0.25),
-                            facecolors='none', edgecolors='#888', linewidth=1.2)
+                               facecolors='none', edgecolors='#888', linewidth=1.2)
                 t0 += r["move_time"]
             # 加工段（若 process_time > 0）用实心色块
             if r["process_time"] > 0:
                 ax.broken_barh([(t0, r["process_time"])],
-                            (y-0.2, 0.4), facecolors=_job_color(r["Job_ID"]))
+                               (y-0.2, 0.4), facecolors=_job_color(r["Job_ID"]))
         yticks.append(y)
         ylabels.append(f"Plane {pid}")
         y += 1
@@ -197,6 +234,21 @@ def _plot_gantt(plan: List[Dict[str, Any]], png_path: str):
     ax.set_xlabel("Time (min)")
     ax.set_title("Schedule Gantt (best group)")
     ax.grid(True, axis='x', linestyle='--', alpha=0.3)
+    # 构造图例：每个 Job_ID 对应一个颜色，添加移动段说明
+    import matplotlib.patches as mpatches
+    import matplotlib.lines as mlines
+    job_ids = sorted(set(r["Job_ID"] for r in plan))
+    legend_handles = []
+    for jid in job_ids:
+        col = _job_color(jid)
+        patch = mpatches.Patch(color=col, label=f"Job {jid}")
+        legend_handles.append(patch)
+    move_line = mlines.Line2D([], [], color='#888',
+                              linewidth=1.2, label='Move (travel)')
+    legend_handles.append(move_line)
+    ax.legend(handles=legend_handles, loc='upper right',
+              bbox_to_anchor=(1.02, 1.0))
+
     plt.tight_layout()
     plt.savefig(png_path, dpi=160)
     plt.close(fig)
@@ -253,7 +305,7 @@ def _plot_makespan_progress(info: dict, out_dir: str):
         if eval_ms:
             xs = np.array(eval_marks[:len(eval_ms)], dtype=int)
             ax.scatter(xs, eval_ms[:len(xs)], zorder=5, marker="o",
-                    label="Eval best makespan", s=25)
+                       label="Eval best makespan", s=25)
 
     ax.set_title(
         "Makespan progress (training trial-and-error → improved schedules)")
@@ -263,6 +315,99 @@ def _plot_makespan_progress(info: dict, out_dir: str):
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "makespan_progress.png"), dpi=160)
     plt.close(fig)
+
+
+def _plot_stand_usage(plan: List[Dict[str, Any]], png_path: str, batch_size_per_batch: Optional[int] = None):
+    """绘制停机位使用情况甘特图：按停机位分行显示占用时段（仅展示 End_Site 为停机位的加工段）。
+    使用每个飞机一种颜色，并在图例中标注 Plane / Batch 信息（若提供 batch_size_per_batch）。
+    图例放在图表下方并分多行显示，不遮盖甘特图。"""
+    if not plan:
+        return
+    _ensure_dir(png_path)
+    # 聚合到每个停机位
+    by_stand: Dict[int, List[Dict[str, Any]]] = {}
+    for row in plan:
+        sid = int(row.get("End_Site", -1))
+        # 仅考虑站位（假定站位 id <= 28 且 >0）
+        if sid <= 0:
+            continue
+        by_stand.setdefault(sid, []).append(row)
+    for lst in by_stand.values():
+        lst.sort(key=lambda r: r.get("_time_minutes", r.get("Time", 0)))
+
+    # 颜色分配：按 Plane_ID 分配 distinct colors
+    plane_ids = sorted(set(r["Plane_ID"] for r in plan))
+    cmap = plt.get_cmap('tab20')
+    colors = {pid: cmap(i % cmap.N) for i, pid in enumerate(plane_ids)}
+
+    # 计算合适的图例列数和行数（根据飞机数量动态调整）
+    n_planes = len(plane_ids)
+    if n_planes <= 10:
+        ncol = 5
+    elif n_planes <= 20:
+        ncol = 5
+    else:
+        ncol = 6
+
+    # 计算图例需要的行数
+    legend_rows = (n_planes + ncol - 1) // ncol
+
+    # 根据停机位数和图例大小动态调整图表高度
+    # 每个停机位占 0.4，图例每行占 0.25
+    gantt_height = max(4, len(by_stand) * 0.4)
+    legend_height = legend_rows * 0.25 + 0.5  # 加 0.5 的上下边距
+    total_height = gantt_height + legend_height
+
+    fig = plt.figure(figsize=(14, total_height))
+    ax = plt.gca()
+    yticks, ylabels = [], []
+    y = 0
+    for sid in sorted(by_stand.keys()):
+        seq = by_stand[sid]
+        for r in seq:
+            # 使用 _time_minutes 作为绘图时间
+            t0 = r.get("_time_minutes", None)
+            if t0 is None:
+                continue
+            # 停机位上的加工段
+            if r["process_time"] > 0:
+                pid = int(r["Plane_ID"])
+                ax.broken_barh([(t0, r["process_time"])],
+                               (y-0.2, 0.4), facecolors=colors[pid])
+        yticks.append(y)
+        ylabels.append(f"Stand {sid}")
+        y += 1
+
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(ylabels)
+    ax.set_xlabel("Time (min)")
+    ax.set_title("Stand Usage Gantt")
+    ax.grid(True, axis='x', linestyle='--', alpha=0.3)
+
+    # 构造图例：每个 Plane 对应一个颜色，若提供 batch_size_per_batch，标注批次
+    import matplotlib.patches as mpatches
+    legend_handles = []
+    for pid in plane_ids:
+        batch_label = ''
+        if batch_size_per_batch and batch_size_per_batch > 0:
+            batch_idx = int(pid) // int(batch_size_per_batch)
+            batch_label = f" (Batch {batch_idx})"
+        lbl = f"Plane {pid}{batch_label}"
+        patch = mpatches.Patch(color=colors[pid], label=lbl)
+        legend_handles.append(patch)
+
+    # 将图例放在图表下方，不遮盖甘特图
+    # loc='upper center' + bbox_to_anchor=(0.5, -0.1) 将图例放在轴下方
+    ax.legend(handles=legend_handles, loc='upper center',
+              bbox_to_anchor=(0.5, -0.05 - 0.04 * legend_rows),
+              ncol=ncol, frameon=True, framealpha=0.95)
+
+    # 使用 subplots_adjust 为图例预留空间
+    plt.subplots_adjust(bottom=0.1 + 0.04 * legend_rows)
+
+    plt.savefig(png_path, dpi=160, bbox_inches='tight')
+    plt.close(fig)
+
 
 def _plot_metrics(info: Dict[str, Any], out_dir: str, best_idx: int):
     _ensure_dir(os.path.join(out_dir, "dummy"))
@@ -322,7 +467,7 @@ def _plot_metrics(info: Dict[str, Any], out_dir: str, best_idx: int):
         if win:
             ax2 = ax.twinx()
             ax2.plot(win, label="win_rate", linestyle='--',
-                    linewidth=1.0, color='#e15759')
+                     linewidth=1.0, color='#e15759')
             ax2.set_ylabel("Win Rate")
         ax.set_title("Evaluation Metrics")
         ax.set_xlabel("Evaluate Round")

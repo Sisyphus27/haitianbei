@@ -6,10 +6,6 @@ from MARL.network.qmix_net import QMixNet
 
 class QMIX:
     def __init__(self, args):
-        # 设备选择：当 args.cuda=True 但本机不支持时，自动回退到 CPU
-        use_cuda_flag = bool(getattr(args, 'cuda', False)) and torch.cuda.is_available()
-        self.device = torch.device('cuda' if use_cuda_flag else 'cpu')
-        self.use_cuda = use_cuda_flag
         self.n_actions = args.n_actions
         self.n_agents = args.n_agents
         self.state_shape = args.state_shape
@@ -27,54 +23,24 @@ class QMIX:
         self.eval_qmix_net = QMixNet(args)  # 把agentsQ值加起来的网络
         self.target_qmix_net = QMixNet(args)
         self.args = args
-        # 将模型移动到目标设备
-        self.eval_rnn.to(self.device)
-        self.target_rnn.to(self.device)
-        self.eval_qmix_net.to(self.device)
-        self.target_qmix_net.to(self.device)
+        if self.args.cuda:
+            self.eval_rnn.cuda()
+            self.target_rnn.cuda()
+            self.eval_qmix_net.cuda()
+            self.target_qmix_net.cuda()
         self.model_dir = args.model_dir + '/' + args.alg + '/' + str(args.n_agents)+'_agents' + '/' + args.result_name
-        # 如果要求加载模型：更健壮的恢复逻辑
-        if getattr(self.args, 'load_model', False):
-            import glob
-            map_location = 'cuda:0' if getattr(self.args, 'cuda', False) else 'cpu'
-            # 优先使用明确指定的 step；否则自动寻找目录下最新的 *_rnn_net_params.pkl
-            step = getattr(self.args, 'load_step', None)
-            path_rnn, path_qmix = None, None
-            if step is not None:
-                cand_rnn = os.path.join(self.model_dir, f"{int(step)}_rnn_net_params.pkl")
-                cand_qm = os.path.join(self.model_dir, f"{int(step)}_qmix_net_params.pkl")
-                if os.path.exists(cand_rnn) and os.path.exists(cand_qm):
-                    path_rnn, path_qmix = cand_rnn, cand_qm
-            if path_rnn is None or path_qmix is None:
-                rnn_list = sorted(glob.glob(os.path.join(self.model_dir, "*_rnn_net_params.pkl")))
-                qm_list = sorted(glob.glob(os.path.join(self.model_dir, "*_qmix_net_params.pkl")))
-                if rnn_list and qm_list:
-                    # 取共同的最新编号
-                    def _num(p):
-                        base = os.path.basename(p).split('_')[0]
-                        try:
-                            return int(base)
-                        except Exception:
-                            return -1
-                    pairs = {}
-                    for p in rnn_list:
-                        pairs.setdefault(_num(p), [None, None])[0] = p
-                    for p in qm_list:
-                        pairs.setdefault(_num(p), [None, None])[1] = p
-                    ks = [k for k, (a, b) in pairs.items() if k >= 0 and a and b]
-                    if ks:
-                        best = max(ks)
-                        path_rnn, path_qmix = pairs[best]
-            if path_rnn and path_qmix:
+        # 如果存在模型则加载模型
+        if self.args.load_model:
+            # print(self.model_dir)
+            if os.path.exists(self.model_dir + '/554_rnn_net_params.pkl'):
+                path_rnn = self.model_dir + '/554_rnn_net_params.pkl'
+                path_qmix = self.model_dir + '/554_qmix_net_params.pkl'
+                map_location = 'cuda:0' if self.args.cuda else 'cpu'
                 self.eval_rnn.load_state_dict(torch.load(path_rnn, map_location=map_location))
                 self.eval_qmix_net.load_state_dict(torch.load(path_qmix, map_location=map_location))
                 print('Successfully load the model: {} and {}'.format(path_rnn, path_qmix))
             else:
-                # 当未找到模型时：若严格模式则抛错，否则给出提示并从头初始化（不再中断调试）
-                if getattr(self.args, 'load_model_strict', False):
-                    raise FileNotFoundError(f"No checkpoint found under {self.model_dir}. You can set load_model_strict=False to auto-continue.")
-                else:
-                    print(f"[QMIX] No checkpoint found under {self.model_dir}, continue without loading.")
+                raise Exception("No model!")
 
         # 让target_net和eval_net的网络参数相同
         self.target_rnn.load_state_dict(self.eval_rnn.state_dict())
@@ -111,13 +77,13 @@ class QMIX:
 
         # 得到每个agent对应的Q值，维度为(episode个数, max_episode_len， n_agents， n_actions)
         q_evals, q_targets = self.get_q_values(batch, max_episode_len)
-        # 迁移到设备
-        s = s.to(self.device)
-        u = u.to(self.device)
-        r = r.to(self.device)
-        s_next = s_next.to(self.device)
-        terminated = terminated.to(self.device)
-        mask = mask.to(self.device)
+        if self.args.cuda:
+            s = s.cuda()
+            u = u.cuda()
+            r = r.cuda()
+            s_next = s_next.cuda()
+            terminated = terminated.cuda()
+            mask = mask.cuda()
         # 取每个agent动作对应的Q值，并且把最后不需要的一维去掉，因为最后一维只有一个值了
         # 这块如果报错runtime error的话，是因为由于瞎训练的，导致模型发散，从而使得在episode_limit里没有完成任务，从而导致提取的batch为0
         q_evals = torch.gather(q_evals, dim=3, index=u).squeeze(3)
@@ -186,13 +152,11 @@ class QMIX:
         q_evals, q_targets = [], []
         for transition_idx in range(max_episode_len):
             inputs, inputs_next = self._get_inputs(batch, transition_idx)  # inputs为当前transition_idx每个episode每个agent的 obs + last_action + agent_id 维度为(40,51)
-            # 输入与隐藏状态迁移到设备
-            inputs = inputs.to(self.device)
-            inputs_next = inputs_next.to(self.device)
-            if self.eval_hidden is not None:
-                self.eval_hidden = self.eval_hidden.to(self.device)
-            if self.target_hidden is not None:
-                self.target_hidden = self.target_hidden.to(self.device)
+            if self.args.cuda:
+                inputs = inputs.cuda()
+                inputs_next = inputs_next.cuda()
+                self.eval_hidden = self.eval_hidden.cuda()
+                self.target_hidden = self.target_hidden.cuda()
             q_eval, self.eval_hidden = self.eval_rnn(inputs, self.eval_hidden)  # inputs维度为(40,51)，得到的q_eval维度为(40,n_actions)
             q_target, self.target_hidden = self.target_rnn(inputs_next, self.target_hidden)
 
@@ -216,8 +180,8 @@ class QMIX:
 
     def init_hidden(self, episode_num):
         # 为每个episode中的每个agent都初始化一个eval_hidden、target_hidden
-        self.eval_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim), device=self.device)
-        self.target_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim), device=self.device)
+        self.eval_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
+        self.target_hidden = torch.zeros((episode_num, self.n_agents, self.args.rnn_hidden_dim))
 
     def save_model(self, train_step):
         num = str(train_step // self.args.save_cycle)

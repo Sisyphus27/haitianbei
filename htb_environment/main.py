@@ -1,22 +1,76 @@
+﻿import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import numpy as np
 import pickle
 from environment import ScheduleEnv
 import sys
-import os
 # from os.path import dirname, abspath
 # sys.path.append(dirname(dirname(abspath(__file__))))
 from MARL.runner import Runner
 from MARL.common.arguments import get_common_args, get_mixer_args
-from pipeline.pipeline import run_kg_epoch_pipeline
 from utils.PDRs.shortestDistence import SDrules
 from utils.knowledgeGraph_test import KGPrior
+from snapshot_scheduler import infer_schedule_from_snapshot
 import json
 from datetime import datetime
 
 np.random.seed(2)
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+
+def _load_snapshot_payload(source: str):
+    spec = (source or "").strip()
+    if not spec:
+        return None
+    if os.path.exists(spec):
+        with open(spec, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return json.loads(spec)
+
+
+def _jsonify_events(events):
+    out = []
+    for evt in events or []:
+        if isinstance(evt, tuple):
+            out.append(list(evt))
+        else:
+            out.append(evt)
+    return out
+
+
+def _maybe_run_snapshot_mode(args) -> bool:
+    spec = getattr(args, "snapshot_json", "")
+    if not spec:
+        return False
+    try:
+        snapshot = _load_snapshot_payload(spec)
+    except Exception as exc:
+        print(f"[Snapshot] Failed to parse {spec}: {exc}")
+        sys.exit(1)
+    if not isinstance(snapshot, dict):
+        print("[Snapshot] snapshot_json must be a JSON object")
+        sys.exit(1)
+    if snapshot.get("planes"):
+        args.n_agents = len(snapshot["planes"])
+    info = infer_schedule_from_snapshot(args, snapshot)
+    result = {
+        "time": info.get("time"),
+        "reward": info.get("reward"),
+        "episodes_situation": _jsonify_events(info.get("episodes_situation")),
+        "devices_situation": info.get("devices_situation", []),
+    }
+    if "disturbance" in info:
+        result["disturbance"] = info["disturbance"]
+    base_dir = os.path.join(args.result_dir, str(getattr(args, "result_name", "snapshot")))
+    out_dir = os.path.join(base_dir, "snapshot")
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join(out_dir, f"snapshot_{stamp}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=4)
+    t = result.get("time") or 0.0
+    print(f"[Snapshot] Finished snapshot rollout, makespan={t:.2f} min, output={out_path}")
+    return True
 
 
 # 强化学习决策函数，带入来自DRL的强化学习agent
@@ -24,14 +78,13 @@ def marl_agent_wrapper():
     args = get_common_args()
     args.alg = 'qmix'
 
-    if getattr(args, "use_task1_kg", False):
-        # 指定先验维度（示例）
-        if not hasattr(args, "prior_dim_site"):
-            args.prior_dim_site = 8
-        if not hasattr(args, "prior_dim_plane"):
-            args.prior_dim_plane = 3
-        run_kg_epoch_pipeline(args)
+    if _maybe_run_snapshot_mode(args):
         return
+
+    # 如果使用 batch_mode 便默认以评估模式运行（避免 argparse 的 bool 解析陷阱导致无法通过命令行禁用 learn/load_model）
+    if getattr(args, 'batch_mode', False):
+        args.learn = False
+        args.load_model = False
 
     # 先构造带 args 的环境
     env = ScheduleEnv(args)
@@ -66,16 +119,15 @@ def marl_agent_wrapper():
             win_rate, reward, time, move_time, running_time))
 
 
-
 # 随机决策函数，用于测试环境
 def random_agent_wrapper():
 
     results = {
-            "makespan": [],
-            "schedule_results": [],
-            "win_tag":[],
-            "win_rates": []
-        }
+        "makespan": [],
+        "schedule_results": [],
+        "win_tag": [],
+        "win_rates": []
+    }
     episodes = 100
     env = ScheduleEnv()
     n_agents = 16
@@ -124,28 +176,29 @@ def random_agent_wrapper():
     running_time = end_time - start_time
     results["running_time"] = str(running_time)
     results["win_rates"].append(win_rate)
-    print('Evaluate win_rate: {}, makespan: {}, running_time: {}, step: {}'.format(win_num/episodes, average_makespan, running_time, step))
+    print('Evaluate win_rate: {}, makespan: {}, running_time: {}, step: {}'.format(
+        win_num/episodes, average_makespan, running_time, step))
     # 存储中间结果
     with open("result/random/test.json", 'w') as f:
-            json.dump(results, f, indent=4)
-    
+        json.dump(results, f, indent=4)
 
 
 def SDrules_agent_wrapper():
     n_agents = 8
     episodes = 20
     results = {
-            "makespan": [],
-            "schedule_results": [],
-            "win_tag":[],
-            "win_rates": []
-        }
+        "makespan": [],
+        "schedule_results": [],
+        "win_tag": [],
+        "win_rates": []
+    }
     sd_rules = SDrules()
     env = ScheduleEnv()
     env.reset(n_agents)
     env_info = env.get_env_info()
     episode_limit = env_info["episode_limit"]
-    sites_locations = [env.sites[i].absolute_position for i in range(len(env.sites))]
+    sites_locations = [
+        env.sites[i].absolute_position for i in range(len(env.sites))]
     win_num = 0
     actions = []
     start_time = datetime.now()
@@ -156,14 +209,16 @@ def SDrules_agent_wrapper():
         step = 0
         while not done and step < episode_limit:
             actions = []
-            agents_id_sequence = sd_rules.FIFO_generate_agents_sequence(len(env.planes))  # 智能体选择顺序
+            agents_id_sequence = sd_rules.FIFO_generate_agents_sequence(
+                len(env.planes))  # 智能体选择顺序
             # agents_id_sequence = sd_rules.MLF_generate_agents_sequence(env.planes)
             # agents_id_sequence = sd_rules.LLF_generate_agents_sequence(env.planes)
 
             for agent_id in agents_id_sequence:
                 avail_actions = env.get_avail_agent_actions(agent_id)
                 current_plane_location = env.planes[agent_id].position
-                action = sd_rules.choose_action(agent_id, avail_actions, current_plane_location, sites_locations, speed)
+                action = sd_rules.choose_action(
+                    agent_id, avail_actions, current_plane_location, sites_locations, speed)
                 actions.append(action)
                 if action < len(env.sites):
                     env.has_chosen_action(action, agent_id)
@@ -171,7 +226,7 @@ def SDrules_agent_wrapper():
             reorder_actions = [-1 for i in range(len(env.planes))]
             for i in range(len(env.planes)):
                 reorder_actions[agents_id_sequence[i]] = actions[i]
-            
+
             _, done, info = env.step(reorder_actions)
             step += 1
         if done:
@@ -186,25 +241,26 @@ def SDrules_agent_wrapper():
     running_time = end_time - start_time
     results["running_time"] = str(running_time)
     results["win_rates"].append(win_rate)
-    print('Evaluate win_rate: {}, makespan: {}, running_time: {}'.format(win_num/episodes, average_makespan, running_time))
+    print('Evaluate win_rate: {}, makespan: {}, running_time: {}'.format(
+        win_num/episodes, average_makespan, running_time))
     # 存储中间结果
-    save_path = "result/SDrules/" + str(n_agents) +"/info.json"
+    save_path = "result/SDrules/" + str(n_agents) + "/info.json"
     with open(save_path, 'w') as f:
-            json.dump(results, f, indent=4)
+        json.dump(results, f, indent=4)
 
 
 def Genetic_agent_wrapper():
     from GA import GeneticAlgorithm
     episodes = 20
     results = {
-            "makespan": [],
-            "average_makespan": [],
-            "move_time":[],
-            "average_move_time":[],
-            "schedule_results": [],
-            "win_tag":[],
-            "win_rate": []
-        }
+        "makespan": [],
+        "average_makespan": [],
+        "move_time": [],
+        "average_move_time": [],
+        "schedule_results": [],
+        "win_tag": [],
+        "win_rate": []
+    }
     n_agents = 12
     env = ScheduleEnv()
     env.reset(n_agents)
@@ -217,23 +273,25 @@ def Genetic_agent_wrapper():
         env.reset(n_agents)
         step = 0
         while not done and step < episode_limit:
-            ga = GeneticAlgorithm(env, population_size=10, generations=5, mutation_rate=0.1)
+            ga = GeneticAlgorithm(env, population_size=10,
+                                  generations=5, mutation_rate=0.1)
             actions = ga.run()
             for i, action in enumerate(actions):
                 if action < len(env.sites):
-                        env.has_chosen_action(action, i)
+                    env.has_chosen_action(action, i)
             reward, done, info = env.step(actions)
             step += 1
         if done:
             win_num += 1
             results["schedule_results"].append(info["episodes_situation"])
-            move_time = sum(job_trans[5] for job_trans in info["episodes_situation"])
+            move_time = sum(job_trans[5]
+                            for job_trans in info["episodes_situation"])
             move_time = move_time / n_agents
         results["win_tag"].append(done)
         results["makespan"].append(info["time"])
         results["move_time"].append(move_time)
         print("episode ", episode+1, " makespan: ", info["time"])
-    
+
     win_rate = win_num/episodes
     average_makespan = sum(results["makespan"])/episodes
     results["average_makespan"].append(average_makespan)
@@ -243,25 +301,26 @@ def Genetic_agent_wrapper():
     end_time = datetime.now()
     running_time = end_time - start_time
     results["running_time"] = str(running_time)
-    print('Evaluate win_rate: {}, makespan: {}, move_times: {}, running_time: {}'.format(win_rate, average_makespan, average_move_time, running_time))
+    print('Evaluate win_rate: {}, makespan: {}, move_times: {}, running_time: {}'.format(
+        win_rate, average_makespan, average_move_time, running_time))
     # 存储中间结果
-    save_path = "result/GA/" + str(n_agents) +"/info.json"
+    save_path = "result/GA/" + str(n_agents) + "/info.json"
     with open(save_path, 'w') as f:
-            json.dump(results, f, indent=4)
-    
+        json.dump(results, f, indent=4)
+
 
 def Diff_Evolution_agent_wrapper():
     from DE import DifferentialEvolution
     episodes = 300
     results = {
-            "makespan": [],
-            "average_makespan": [],
-            "move_time":[],
-            "average_move_time":[],
-            "schedule_results": [],
-            "win_tag":[],
-            "win_rate": []
-        }
+        "makespan": [],
+        "average_makespan": [],
+        "move_time": [],
+        "average_move_time": [],
+        "schedule_results": [],
+        "win_tag": [],
+        "win_rate": []
+    }
     n_agents = 8
     env = ScheduleEnv()
     env.reset(n_agents)
@@ -279,19 +338,20 @@ def Diff_Evolution_agent_wrapper():
             actions = de.run()
             for i, action in enumerate(actions):
                 if action < len(env.sites):
-                        env.has_chosen_action(action, i)
+                    env.has_chosen_action(action, i)
             reward, done, info = env.step(actions)
             step += 1
         if done:
             win_num += 1
             results["schedule_results"].append(info["episodes_situation"])
-            move_time = sum(job_trans[5] for job_trans in info["episodes_situation"])
+            move_time = sum(job_trans[5]
+                            for job_trans in info["episodes_situation"])
             move_time = move_time / n_agents
         results["win_tag"].append(done)
         results["makespan"].append(info["time"])
         results["move_time"].append(move_time)
         print("episode ", episode+1, " makespan: ", info["time"])
-    
+
     win_rate = win_num/episodes
     average_makespan = sum(results["makespan"])/episodes
     results["average_makespan"].append(average_makespan)
@@ -301,13 +361,12 @@ def Diff_Evolution_agent_wrapper():
     end_time = datetime.now()
     running_time = end_time - start_time
     results["running_time"] = str(running_time)
-    print('Evaluate win_rate: {}, makespan: {}, move_times: {}, running_time: {}'.format(win_rate, average_makespan, average_move_time, running_time))
+    print('Evaluate win_rate: {}, makespan: {}, move_times: {}, running_time: {}'.format(
+        win_rate, average_makespan, average_move_time, running_time))
     # 存储中间结果
-    save_path = "result/DE/" + str(n_agents) +"/info.json"
+    save_path = "result/DE/" + str(n_agents) + "/info.json"
     with open(save_path, 'w') as f:
-            json.dump(results, f, indent=4)
-
-
+        json.dump(results, f, indent=4)
 
 
 if __name__ == "__main__":

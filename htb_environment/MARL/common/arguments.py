@@ -2,7 +2,6 @@
 
 import argparse
 import os
-import logging
 
 
 def get_common_args():
@@ -46,37 +45,44 @@ def get_common_args():
     parser.add_argument('--epsilon_start', type=float, default=None)
     parser.add_argument('--epsilon_end', type=float, default=None)
     parser.add_argument('--epsilon_anneal_steps', type=int, default=None)
-    parser.add_argument('--epsilon_anneal_scale', type=str,
-                        default=None, choices=['step', 'episode', 'epoch'])
-    
+    parser.add_argument('--epsilon_anneal_scale',
+                        type=str,
+                        default=None,
+                        choices=['step', 'episode', 'epoch'])
 
-    # neo4j 连接参数（支持从 NEO4J_AUTH 解析）
-    parser.add_argument("--use_task1_kg", action="store_true",
-                        help="使用任务一的Dataset_KG作为先验，并在每个epoch回写三元组")
-    parser.add_argument("--prior_dim_site", type=int, default=8)
-    parser.add_argument("--prior_dim_plane", type=int, default=3)
-    parser.add_argument("--neo4j_uri", type=str,
-                        default=os.environ.get("NEO4J_URI"))
-    parser.add_argument("--neo4j_user", type=str,
-                        default=os.environ.get("NEO4J_USER"))
-    parser.add_argument("--neo4j_password", type=str,
-                        default=os.environ.get("NEO4J_PASSWORD"))
-    parser.add_argument("--neo4j_database", type=str,
-                        default=os.environ.get("NEO4J_DATABASE"))
+    # 环境设置
+    parser.add_argument('--landing_sep_min', type=int, default=0)
+    parser.add_argument('--arrival_gap_min', type=int, default=0)
+    parser.add_argument('--plane_speed', type=int, default=5)
+    # 批次测试场景（用于构造按批次到达的 arrival_plan）
+    parser.add_argument('--batch_mode', action='store_true', default=False,
+                        help='启用批次到达模式（用于评估指定批次/间隔的着陆场景）')
+    parser.add_argument('--batch_start_time_min', type=int, default=7*60,
+                        help='批次场景第一个航班的起始时间（分钟），例如 07:00 -> 420')
+    parser.add_argument('--batch_size_per_batch', type=int, default=12,
+                        help='每批飞机数（重命名以避免与训练参数 batch_size 冲突）')
+    parser.add_argument('--batches_count', type=int, default=1,
+                        help='批次数（总飞机数 = batch_size * batches_count；如评估用设置 n_agents=总飞机数）')
+    parser.add_argument('--intra_gap_min', type=int, default=2,
+                        help='同一批内相邻飞机的到达间隔（分钟）')
+    parser.add_argument('--inter_batch_gap_min', type=int, default=60,
+                        help='批次间隔（上一批最后一架落地到下一批首架落地的分钟数）')
 
+    # 扰动事件配置
+    parser.add_argument('--enable_disturbance', action='store_true', default=False,
+                        help='开启扰动事件调度逻辑')
+    parser.add_argument('--disturbance_events', type=str, default='',
+                        help='扰动事件配置，支持 JSON 字符串或 JSON 文件路径，格式见 readme.md')
+
+    # 快照调度
+    parser.add_argument('--snapshot_json', type=str, default='',
+                        help='若提供 JSON 文件路径或 JSON 字符串，则跳过训练/评估，直接基于快照推理后续调度计划')
 
     args = parser.parse_args()
     return args
 
 
 def get_mixer_args(args):
-    """补齐 QMIX 训练所需的缺省参数。
-
-    调试改进：统一 epsilon 逻辑，避免因为全部为 None 导致进入 else 分支时看起来像是"跳出"函数；
-    同时添加 DEBUG 日志，单步跟踪时更易观察。始终在函数末尾返回 args，不存在早退。
-    """
-    log = logging.getLogger('marl.args')
-
     def _setdefault(name, value):
         if getattr(args, name, None) is None:
             setattr(args, name, value)
@@ -88,34 +94,22 @@ def get_mixer_args(args):
     _setdefault('hyper_hidden_dim', 64)
     _setdefault('lr', 5e-4)
 
-    # ===== epsilon （统一逻辑，不分支早退） =====
-    any_provided = any(v is not None for v in (
-        getattr(args, 'epsilon_start', None),
-        getattr(args, 'epsilon_end', None),
-        getattr(args, 'epsilon_anneal_steps', None),
-    ))
-    if any_provided:
-        eps = 1.0 if getattr(args, 'epsilon_start', None) is None else args.epsilon_start
-        mine = 0.05 if getattr(args, 'epsilon_end', None) is None else args.epsilon_end
-        steps = 50000 if getattr(args, 'epsilon_anneal_steps', None) is None else args.epsilon_anneal_steps
+    # epsilon
+    if args.epsilon_start is not None or args.epsilon_end is not None or args.epsilon_anneal_steps is not None:
+        eps = 1.0 if args.epsilon_start is None else args.epsilon_start
+        mine = 0.05 if args.epsilon_end is None else args.epsilon_end
+        steps = 50000 if args.epsilon_anneal_steps is None else args.epsilon_anneal_steps
+        args.epsilon = eps
+        args.min_epsilon = mine
+        args.anneal_epsilon = (eps - mine) / float(max(1, steps))
+        if getattr(args, 'epsilon_anneal_scale', None) is None:
+            args.epsilon_anneal_scale = 'step'
     else:
-        # 使用已有 (可能已经传入) 或缺省值
-        eps = getattr(args, 'epsilon', None)
-        if eps is None:
-            eps = 1.0
-        mine = getattr(args, 'min_epsilon', None)
-        if mine is None:
-            mine = 0.05
-        steps = 50000  # 未显式提供时使用缺省 anneal 步数
-    # 统一写回
-    args.epsilon = eps
-    args.min_epsilon = mine
-    args.anneal_epsilon = (eps - mine) / float(max(1, steps))
-    if getattr(args, 'epsilon_anneal_scale', None) is None:
-        args.epsilon_anneal_scale = 'step'
-    log.debug(
-        f"[ARGS] epsilon_start={getattr(args,'epsilon_start',None)} epsilon_end={getattr(args,'epsilon_end',None)} steps={getattr(args,'epsilon_anneal_steps',None)} -> epsilon={args.epsilon:.4f} min={args.min_epsilon:.4f} anneal={args.anneal_epsilon:.8f} scale={args.epsilon_anneal_scale} provided={any_provided}"
-    )
+        _setdefault('epsilon', 1.0)
+        _setdefault('min_epsilon', 0.05)
+        _setdefault('anneal_epsilon',
+                    (args.epsilon - args.min_epsilon) / 50000.0)
+        _setdefault('epsilon_anneal_scale', 'step')
 
     # loop
     _setdefault('n_epoch', 5)
@@ -129,7 +123,4 @@ def get_mixer_args(args):
 
     # training misc
     _setdefault('grad_norm_clip', 10)
-    log.debug(
-        f"[ARGS] loop defaults: n_epoch={args.n_epoch} n_episodes={args.n_episodes} train_steps={args.train_steps} batch_size={args.batch_size} buffer_size={args.buffer_size}"
-    )
     return args

@@ -35,24 +35,8 @@ class Runner:
         self.env = env
         self.args = args
 
-        # 确保在创建 Agents 之前补齐环境维度信息
-        try:
-            # 初始化环境（若已经 reset 可忽略异常）
-            if hasattr(self.env, 'reset'):
-                self.env.reset(self.args.n_agents)
-            if hasattr(self.env, 'get_env_info'):
-                info = self.env.get_env_info()
-                # 将必须的字段写回 args，供 Agents/QMIX 使用
-                self.args.n_actions = int(info.get('n_actions', getattr(self.args, 'n_actions', 0)))
-                self.args.state_shape = int(info.get('state_shape', getattr(self.args, 'state_shape', 0)))
-                self.args.obs_shape = int(info.get('obs_shape', getattr(self.args, 'obs_shape', 0)))
-                self.args.episode_limit = int(info.get('episode_limit', getattr(self.args, 'episode_limit', 0)))
-        except Exception:
-            # 保底：若 env 未提供上述方法，保持现状，由下游在访问时抛出更明确的错误
-            pass
-
-        self.agents = Agents(self.args)
-        self.rolloutWorker = RolloutWorker(self.env, self.agents, self.args)
+        self.agents = Agents(args)
+        self.rolloutWorker = RolloutWorker(env, self.agents, args)
 
         if args.learn:
             self.buffer = ReplayBuffer(args)
@@ -67,7 +51,7 @@ class Runner:
             "evaluate_move_time": [],
             "average_move_time": [],
             "schedule_results": [],
-            "devices_results": [],   
+            "devices_results": [],
             "win_rates": [],
             "train_reward": [],
             "train_makespan": [],
@@ -155,7 +139,7 @@ class Runner:
         except Exception:
             move_jid = 1
         convert_schedule_with_fixed_logic(
-            file_path, plan_path, self.args.n_agents, move_job_id=move_jid)
+            file_path, plan_path, self.args.n_agents, move_job_id=move_jid, batch_size_per_batch=getattr(self.args, 'batch_size_per_batch', None))
 
     def export_schedule_csv(self, episodes_situation, devices=None, filename="schedule.csv"):
         os.makedirs(self.save_path, exist_ok=True)
@@ -163,7 +147,7 @@ class Runner:
         with open(fpath, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["time_min", "job_code", "job_id", "site_id", "plane_id",
-                    "proc_min", "move_min", "FixedDevices", "MobileDevices"])
+                        "proc_min", "move_min", "FixedDevices", "MobileDevices"])
             for idx, row in enumerate(sorted(episodes_situation, key=lambda x: x[0])):
                 t, jid, sid, pid, pmin, mmin = row
                 code = self.env.jobs_obj.id2code()[jid]
@@ -172,8 +156,6 @@ class Runner:
                 w.writerow([f"{t:.2f}", code, jid, sid, pid, f"{pmin:.2f}", f"{mmin:.2f}",
                             ";".join(map(str, dev.get("FixedDevices", []))), ";".join(map(str, dev.get("MobileDevices", [])))])
 
-    
-    
     def evaluate(self):
         file_path = os.path.join(self.save_path, "evaluate.json")
         plan_path = os.path.join(self.save_path, "plan_eval.json")
@@ -205,8 +187,11 @@ class Runner:
         self.results['average_move_time'].append(move_time)
         self.results['win_rates'].append(win_rate)
 
-        # 保存 evaluate.json + plan_eval.json（若只加载模型进行评估）
-        if self.args.load_model and not self.args.learn:
+        # 保存 evaluate.json + plan_eval.json
+        # 原逻辑仅在加载模型并非训练时保存（load_model and not learn）。
+        # 为了支持 batch_mode 下的测试场景（即使不加载模型）也生成相同格式的输出，扩展为
+        # 在满足 load_model 且非训练，或显式开启 batch_mode 时保存结果并调用转换器。
+        if (self.args.load_model and not self.args.learn) or getattr(self.args, 'batch_mode', False):
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(self.results, f, indent=4, cls=NumpyEncoder)
             try:
@@ -214,13 +199,13 @@ class Runner:
             except Exception:
                 move_jid = 1
             convert_schedule_with_fixed_logic(
-                file_path, plan_path, self.args.n_agents, move_job_id=move_jid)
+                file_path, plan_path, self.args.n_agents, move_job_id=move_jid, batch_size_per_batch=getattr(self.args, 'batch_size_per_batch', None))
 
         # 可选导出 CSV（取最后一组）
         if getattr(self.args, "export_csv", True) and len(self.results["schedule_results"]) > 0:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.export_schedule_csv(self.results["schedule_results"][-1],
-                                    self.results.get(
-                                        "devices_results", [None])[-1],
-                                    filename=f"schedule_{stamp}.csv")
+                                     self.results.get(
+                "devices_results", [None])[-1],
+                filename=f"schedule_{stamp}.csv")
         return win_rate, reward, time, move_time

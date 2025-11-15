@@ -5,7 +5,7 @@
 """
 # utils/plane.py
 import numpy as np
-from typing import List, Set, Optional, Any
+from typing import Any, Dict, List, Set, Optional, Tuple
 from utils.task import Task, Job
 
 
@@ -45,10 +45,10 @@ class Plane:
         self.move_last_min: float = 0.0
         self.proc_last_min: float = 0.0
         self.move_code: Optional[str] = None
-        # ==== 扩展的调度环境临时字段（并行/设备/移动占用句柄）====
-        self._last_handles: List[Any] = []          # 最近一次作业占用的设备句柄列表
-        self._active_jobs: Optional[List[Job]] = None  # 并行开工的作业集合
-        self._move_handles: Optional[List[Any]] = None # 正在移动阶段锁定的设备集合（牵引车等）
+        self.paused_jobs: List[Dict[str, Any]] = []
+        self.active_job_progress: Dict[str, float] = {}
+        self._job_total_durations: Dict[str, float] = {}
+        self._active_event_indices: List[Tuple[str, int]] = []
 
 
     @property
@@ -68,6 +68,9 @@ class Plane:
         self.current_job_code = job.code
         self.eta_proc_end = process_min
         self.proc_last_min = float(process_min)
+        self.active_job_progress = {job.code: float(process_min)}
+        self._job_total_durations = {job.code: float(process_min)}
+        self._active_event_indices = []
         for m in job.mutex:
             self.ongoing_mutex.add(m)
 
@@ -91,3 +94,6 @@ class Plane:
         self.current_job_code = None
         self.status = "IDLE"
         self.eta_proc_end = 0.0
+        self.active_job_progress = {}
+        self._job_total_durations = {}
+        self._active_event_indices = []
