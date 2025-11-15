@@ -74,25 +74,71 @@ python main.py --learn False --load_model False --n_agents 12 --batch_mode --bat
     {
       "plane_id": 0,
       "status": "PROCESSING",
-      "current_site_id": 12,
-      "position": [95.0, 100.0],
-      "fuel_percent": 60.0,
-      "finished_codes": ["ZY_Z", "ZY_M", "ZY01", "ZY03"],
-      "active_job": "ZY04+ZY05",
-      "active_remaining": {"ZY04": 1.2, "ZY05": 2.0},
-      "eta_proc_end": 2.0,
-      "eta_move_end": 0.0,
-      "paused_jobs": [{"code": "ZY07", "remaining": 0.8}]
+      "current_site_id": 5,
+      "active_job": "ZY02",
+      "active_remaining": { "ZY02": 1.5 }
+    },
+    {
+      "plane_id": 1,
+      "status": "PROCESSING",
+      "current_site_id": 6,
+      "active_job": "ZY03",
+      "active_remaining": { "ZY03": 2.0 }
+    },
+    {
+      "plane_id": 2,
+      "status": "PROCESSING",
+      "current_site_id": 7,
+      "active_job": "ZY04",
+      "active_remaining": { "ZY04": 2.8 }
+    },
+    {
+      "plane_id": 3,
+      "status": "PROCESSING",
+      "current_site_id": 8,
+      "active_job": "ZY05",
+      "active_remaining": { "ZY05": 2.2 }
+    },
+    {
+      "plane_id": 4,
+      "status": "IDLE",
+      "current_site_id": 9,
+      "paused_jobs": [
+        { "code": "ZY06", "remaining": 1.0 }
+      ]
+    },
+    {
+      "plane_id": 5,
+      "status": "IDLE",
+      "current_site_id": 10
+    },
+    {
+      "plane_id": 6,
+      "status": "IDLE"
+    },
+    {
+      "plane_id": 7,
+      "status": "IDLE"
     }
   ],
-  "stand_occupancy": {"12": 0, "15": null},
-  "blocked_stands": [5, 6],
-  "arrival_plan": {"0": 420.0},
+  "blocked_stands": [5,6,7,8,9],
+  "arrival_plan": { "6": 500.0, "7": 505.0 },
   "devices": {
-    "fixed": {"FR5": {"in_use": [0, 1], "capacity": 2}},
-    "mobile": {"MR20": {"loc_stand": 15, "busy_until_min": 510.0, "locked_by": 3, "speed_m_s": 3.0}}
+    "fixed": {
+      "FR5": { "in_use": [2], "capacity": 2 }
+    },
+    "mobile": {
+      "MR05": {
+        "loc_stand": 7,
+        "busy_until_min": 492.0,
+        "locked_by": 2,
+        "speed_m_s": 3.0
+      }
+    }
   },
-  "site_unavailable": {"7": [[450.0, 520.0]]}
+  "disturbance_events": [
+    { "id": 0, "start": 500.0, "end": 540.0, "stands": [5,6,7,8,9] }
+  ]
 }
 ```
 
