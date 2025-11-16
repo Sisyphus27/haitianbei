@@ -9,7 +9,53 @@
 3. 当检测到冲突时，调用大模型进行冲突判定
 4. 生成强化学习重调度所需的快照配置文件
 5. 在整个流程中持续更新KG
+
+涉及的文件：
+
+直接导入的文件：
+- exp/exp_main.py: 主实验类，提供stream-judge模式和KG服务
+- exp/exp_basic.py: 基础实验类
+- data_provider/data_loader.py: 数据加载器
+- utils/utils.py: 工具函数（detect_potential_conflict, generate_snapshot_from_kg）
+
+从htb_environment导入的文件：
+- htb_environment/snapshot_scheduler.py: 强化学习重调度入口（infer_schedule_from_snapshot）
+- htb_environment/environment.py: 强化学习环境类（ScheduleEnv）
+- htb_environment/pipeline/kg_bridge.py: KG桥接，将调度结果转换为三元组（schedule_to_kg_triples）
+- htb_environment/utils/util.py: 强化学习工具函数
+
+间接使用的文件：
+- exp/kg_service.py: 通过exp.kg_service使用，进行KG查询和更新
+- models/triples_extraction.py: 通过kg_service间接使用，提取三元组
+
+输入输出文件：
+- data_provider/train_texts_task3.jsonl: 输入事件文件（默认）
+- results/task2/conflict_results_*.jsonl: 输出结果文件
+- results/task2/snapshots/*.json: 快照配置文件
+- results/task2/任务三测试场景{X}_A_{team_name}.txt: A文件（冲突判定输出）
+- results/task2/任务三测试场景{X}_S_{team_name}.txt: S文件（快照配置）
+- results/task2/任务三测试场景{X}_P_{team_name}.json: P文件（重调度计划）
 """
+
+# 事件ID白名单：只有这些事件ID会触发大模型调度和强化学习重调度
+SCHEDULE_TRIGGER_EVENT_IDS = [195, 777]
+
+# 场景编号映射：事件ID -> 场景编号
+EVENT_SCENARIO_MAP = {
+    195: 1,  # 事件ID 195 -> 场景1
+    777: 2   # 事件ID 777 -> 场景2
+}
+
+def get_scenario_number(event_id: int) -> int:
+    """获取事件ID对应的场景编号。
+    
+    参数:
+        event_id: 事件ID
+        
+    返回:
+        int: 场景编号（1或2），如果不在映射中则返回0
+    """
+    return EVENT_SCENARIO_MAP.get(event_id, 0)
 
 import os
 import sys
@@ -172,9 +218,9 @@ except Exception as e:
     def detect_potential_conflict(event_text: str) -> bool:
         _logger.warning("detect_potential_conflict 函数不可用，返回 False")
         return False
-    def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict, dict]:
+    def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict, dict, dict]:
         _logger.warning("generate_snapshot_from_kg 函数不可用，返回空字典和空映射")
-        return ({}, {})
+        return ({}, {}, {"aircraft": {}, "devices": {}, "resources": {}})
 
 
 def parse_time_from_event(event_text: str) -> Optional[float]:
@@ -239,7 +285,7 @@ def save_snapshot(snapshot: dict, output_dir: str, event_id: int, timestamp: str
 
 def main():
     """主函数：实现冲突检测与重调度流程。"""
-    parser = argparse.ArgumentParser(description="任务二：冲突检测与重调度系统")
+    parser = argparse.ArgumentParser(description="任务三：冲突检测与重调度系统")
     parser.add_argument(
         "--events_file",
         type=str,
@@ -249,7 +295,7 @@ def main():
     parser.add_argument(
         "--rules_md_path",
         type=str,
-        default="海天杯-技术资料.md",
+        default="rules_sample.md",
         help="规则文档路径（Markdown格式）"
     )
     parser.add_argument(
@@ -275,6 +321,12 @@ def main():
         type=str,
         default=r"C:\Users\zy\.ssh\haitianbei\models\Qwen2_5-3B",
         help="分解模型目录路径"
+    )
+    parser.add_argument(
+        "--judge_base_model_dir",
+        type=str,
+        default=r"C:\Users\zy\.ssh\haitianbei\models\Qwen2_5-14B-Instruct",
+        help="冲突判定模型目录路径（大模型，用于冲突判定推理）"
     )
     parser.add_argument(
         "--neo4j_uri",
@@ -316,14 +368,20 @@ def main():
         default=1,
         help="批量处理大小（建议为1，每条事件立即处理）"
     )
+    parser.add_argument(
+        "--team_name",
+        type=str,
+        default="default",
+        help="队名（用于输出文件命名）"
+    )
     
     args = parser.parse_args()
     
-    # 创建输出目录
+    # 1.2 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.snapshot_dir, exist_ok=True)
     
-    # 初始化Exp_main
+    # 1.3 初始化Exp_main（主实验类，提供模型加载和KG服务）
     _logger.info("[INIT] 初始化Exp_main...")
     try:
         # 创建args对象，设置必要的属性
@@ -334,6 +392,7 @@ def main():
         exp_args.rules_md_path = args.rules_md_path
         exp_args.base_model_dir = args.base_model_dir
         exp_args.decomp_base_model_dir = args.decomp_base_model_dir
+        exp_args.judge_base_model_dir = args.judge_base_model_dir
         exp_args.neo4j_uri = args.neo4j_uri
         exp_args.neo4j_user = args.neo4j_user
         exp_args.neo4j_password = args.neo4j_password
@@ -347,10 +406,11 @@ def main():
         exp_args.print_decomposition = False
         exp_args.disable_kg_vis = True  # 禁用KG可视化以提高性能
         exp_args.task2_output_dir = args.output_dir  # 设置 task2 输出目录
+        exp_args.judge_quant = "int4"  # 使用4bit量化以适配4090显存（14B模型即使8bit量化仍然较大）
         
         # 在初始化前检查强化学习模块状态
         _logger.info("=" * 80)
-        _logger.info("任务二：冲突检测与重调度系统")
+        _logger.info("任务三：冲突检测与重调度系统")
         _logger.info("=" * 80)
         _logger.info(f"[INIT] 强化学习模块状态: _RL_AVAILABLE={_RL_AVAILABLE}")
         if _RL_AVAILABLE:
@@ -365,7 +425,7 @@ def main():
         exp = Exp_main(exp_args)
         _logger.info("[INIT] Exp_main初始化完成")
         
-        # 显式触发模型加载，避免在处理事件时才加载（确保模型只加载一次）
+        # 1.4 预加载模型（避免在处理事件时才加载，确保模型只加载一次）
         _logger.info("[INIT] 预加载模型...")
         try:
             exp._build_model()
@@ -376,7 +436,8 @@ def main():
         _logger.error(f"[INIT] Exp_main初始化失败: {e}")
         return 1
     
-    # 读取事件文件
+    # ==================== 2. 数据加载阶段 ====================
+    # 读取事件文件（JSONL格式，每行一个事件对象，包含id和text字段）
     _logger.info(f"[LOAD] 读取事件文件: {args.events_file}")
     try:
         events_data = []
@@ -400,7 +461,8 @@ def main():
         _logger.error(f"[LOAD] 读取事件文件失败: {e}")
         return 1
     
-    # 准备输出文件
+    # ==================== 3. 预处理阶段 ====================
+    # 3.1 准备输出文件（结果文件、快照文件等）
     import time as _time
     timestamp = _time.strftime("%Y%m%d_%H%M%S", _time.localtime())
     conflict_results_file = os.path.join(args.output_dir, f"conflict_results_{timestamp}.jsonl")
@@ -413,7 +475,19 @@ def main():
         "snapshots_generated": 0
     }
     
-    # 事件处理循环
+    # 3.2 重置KG（清理历史动态数据，仅保留固定节点，确保从干净状态开始）
+    _logger.info("[INIT] 重置KG，清理历史动态数据，仅保留固定节点...")
+    try:
+        if exp.kg_service:
+            exp.kg_service.reset_graph(keep_fixed=True)
+            _logger.info("[INIT] KG重置完成，已清理历史动态关系，仅保留固定节点")
+        else:
+            _logger.warning("[INIT] KG服务不可用，跳过KG重置")
+    except Exception as e:
+        _logger.warning(f"[INIT] KG重置失败，将继续处理事件: {e}")
+    
+    # ==================== 4. 事件处理循环 ====================
+    # 对每个事件进行处理：KG更新 -> 白名单检查 -> 冲突检测 -> 大模型判定 -> 重调度 -> KG写回
     _logger.info("[PROCESS] 开始处理事件...")
     for idx, (event_id, event_text) in enumerate(events_data):
         try:
@@ -425,7 +499,66 @@ def main():
                 _logger.warning(f"[#{idx+1}] 无法解析事件时间，跳过时间相关处理")
                 current_time_min = 0.0
             
-            # 1. 初步冲突检测
+            # 0. 先更新KG（对所有事件，这是必须的，因为后续调度依赖KG状态）
+            try:
+                if exp.kg_service:
+                    # 从事件文本中提取三元组并更新KG
+                    exp.kg_service.extract_and_update(event_text)
+                    _logger.debug(f"[#{idx+1}] KG已更新")
+                    
+                    # 4.2.1 清理离散节点（每次更新后都清理，保持KG干净，避免孤立节点）
+                    try:
+                        deleted_count = exp.kg_service.cleanup_isolated_nodes()
+                        if deleted_count > 0:
+                            _logger.debug(f"[#{idx+1}] 清理离散节点: 删除了 {deleted_count} 个节点")
+                    except Exception as e:
+                        _logger.warning(f"[#{idx+1}] 清理离散节点失败: {e}")
+                else:
+                    _logger.warning(f"[#{idx+1}] KG服务不可用，跳过KG更新")
+            except Exception as e:
+                _logger.warning(f"[#{idx+1}] KG更新失败: {e}")
+            
+            # 4.3 自动修复过期的损坏（基于持续时间的自动修复，例如停机位损坏30分钟后自动恢复）
+            try:
+                if exp.kg_service and current_time_min is not None and current_time_min > 0:
+                    repair_result = exp.kg_service.check_and_repair_expired_failures(current_time_min)
+                    if repair_result.get("total_repaired", 0) > 0:
+                        _logger.info(f"[#{idx+1}] 自动修复统计: {repair_result.get('total_repaired', 0)} 个损坏已修复（停机位: {len(repair_result.get('repaired_stands', []))}, 设备: {len(repair_result.get('repaired_devices', []))}）")
+            except Exception as e:
+                _logger.warning(f"[#{idx+1}] 自动修复过期损坏时出错: {e}")
+            
+            # 4.4 白名单检查（只有白名单中的事件ID才会触发冲突检测和大模型调度）
+            is_in_whitelist = event_id in SCHEDULE_TRIGGER_EVENT_IDS
+            
+            if not is_in_whitelist:
+                # 不在白名单中：只更新KG，跳过冲突检测和大模型调用（节省计算资源）
+                _logger.info(f"[#{idx+1}] 事件 ID={event_id} 不在调度触发白名单中，仅更新KG，跳过冲突检测和大模型调度")
+                result_record = {
+                    "event_id": event_id,
+                    "event_text": event_text,
+                    "time_min": current_time_min,
+                    "potential_conflict": False,
+                    "confirmed_conflict": False,
+                    "compliance": None,
+                    "reasons": [],
+                    "snapshot_file": None,
+                    "reschedule_file": None,
+                    "reschedule_makespan": None,
+                    "reschedule_reward": None,
+                    "skipped_reason": "not_in_whitelist"
+                }
+                # 保存结果并继续下一个事件
+                try:
+                    with open(conflict_results_file, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps(result_record, ensure_ascii=False) + "\n")
+                except Exception as e:
+                    _logger.warning(f"[#{idx+1}] 保存结果失败: {e}")
+                continue
+            
+            # ==================== 4.5 冲突检测与大模型调度流程（白名单事件） ====================
+            _logger.info(f"[#{idx+1}] 事件 ID={event_id} 在白名单中，开始冲突检测和大模型调度流程")
+            
+            # 4.5.1 初步冲突检测（使用关键词匹配，快速筛选可能冲突的事件，减少大模型调用）
             has_potential_conflict = detect_potential_conflict(event_text)
             
             result_record = {
@@ -439,16 +572,20 @@ def main():
                 "snapshot_file": None,
                 "reschedule_file": None,
                 "reschedule_makespan": None,
-                "reschedule_reward": None
+                "reschedule_reward": None,
+                "output_a_file": None,
+                "output_s_file": None,
+                "output_p_file": None,
+                "judge_output_file": None
             }
             
             if has_potential_conflict:
                 stats["potential_conflicts"] += 1
                 _logger.info(f"[#{idx+1}] 检测到潜在冲突，调用大模型判定...")
                 
-                # 2. 调用大模型进行冲突判定
+                # 4.5.2 调用大模型进行冲突判定（结合KG上下文和规则文档，判定是否确实存在冲突）
                 try:
-                    # 使用stream_judge_conflicts进行判定
+                    # 使用stream_judge_conflicts进行判定（抽取时空信息并判定冲突）
                     for ev, output in exp.stream_judge_conflicts(
                         events_iter=[event_text],
                         rules_md_path=args.rules_md_path,
@@ -456,11 +593,24 @@ def main():
                         simple_output=False,
                         show_decomposition=False
                     ):
-                        # 记录大模型原始输出（用于调试）
+                        # 4.5.2.1 记录大模型原始输出（用于调试和问题定位）
                         output_preview = str(output)[:500] if output else "None"
                         _logger.debug(f"[#{idx+1}] 大模型原始输出（前500字符）: {output_preview}")
                         
-                        # 解析输出
+                        # 4.5.2.2 保存独立输出文件（每次调用都保存，无论是否判定为冲突，用于后续分析）
+                        try:
+                            judge_output_filename = f"judge_output_event_{event_id:05d}_{timestamp}.txt"
+                            judge_output_filepath = os.path.join(args.output_dir, judge_output_filename)
+                            os.makedirs(args.output_dir, exist_ok=True)
+                            with open(judge_output_filepath, 'w', encoding='utf-8') as f:
+                                f.write(str(output) if output else "")
+                            _logger.info(f"[#{idx+1}] 大模型输出已保存（独立文件）: {judge_output_filepath}")
+                            result_record["judge_output_file"] = judge_output_filepath
+                        except Exception as e:
+                            _logger.warning(f"[#{idx+1}] 保存大模型独立输出文件失败: {e}")
+                            result_record["judge_output_file"] = None
+                        
+                        # 4.5.2.3 解析大模型输出（提取compliance、reason、suggest等字段）
                         parsed = exp._parse_judge_output(output)
                         compliance = parsed.get("compliance")
                         reasons_len = parsed.get("reasons_len", 0)
@@ -478,11 +628,28 @@ def main():
                         result_record["compliance"] = compliance
                         result_record["confirmed_conflict"] = (compliance == "冲突")
                         
+                        # 4.5.2.4 保存A文件（冲突判定大模型的完整输出，用于评分）
+                        if result_record["confirmed_conflict"]:
+                            scenario_num = get_scenario_number(event_id)
+                            if scenario_num > 0:
+                                try:
+                                    output_a_filename = f"任务三测试场景{scenario_num}_A_{args.team_name}.txt"
+                                    output_a_filepath = os.path.join(args.output_dir, output_a_filename)
+                                    os.makedirs(args.output_dir, exist_ok=True)
+                                    with open(output_a_filepath, 'w', encoding='utf-8') as f:
+                                        f.write(str(output) if output else "")
+                                    _logger.info(f"[#{idx+1}] A文件已保存: {output_a_filepath}")
+                                    result_record["output_a_file"] = output_a_filepath
+                                except Exception as e:
+                                    _logger.warning(f"[#{idx+1}] 保存A文件失败: {e}")
+                                    result_record["output_a_file"] = None
+                        
+                        # ==================== 4.6 确认冲突后的重调度流程 ====================
                         if result_record["confirmed_conflict"]:
                             stats["confirmed_conflicts"] += 1
                             _logger.info(f"[#{idx+1}] 确认冲突，生成快照配置并调用强化学习重调度...")
                             
-                            # 3. 生成快照配置（冲突时使用更详细的文件名）
+                            # 4.6.1 生成快照配置（从KG中提取当前状态，转换为强化学习环境需要的格式）
                             snapshot = None
                             snapshot_file = None
                             try:
@@ -490,14 +657,16 @@ def main():
                                     _logger.error(f"[#{idx+1}] KG服务不可用，无法生成快照")
                                     result_record["snapshot_file"] = None
                                 else:
-                                    snapshot, id_to_name_map = generate_snapshot_from_kg(
+                                    # 生成快照（包含飞机、停机位、设备、资源等状态，以及映射关系）
+                                    snapshot, id_to_name_map, all_mappings = generate_snapshot_from_kg(
                                         exp.kg_service,
                                         current_time_min
                                     )
                                     
-                                    # 保存飞机名称映射信息到快照配置中（用于后续写回KG时恢复名称）
+                                    # 保存映射信息到快照配置中（飞机ID->名称、设备名称、资源名称等，用于后续写回KG时恢复原始名称）
                                     snapshot["_aircraft_id_mapping"] = id_to_name_map
                                     snapshot["_aircraft_names"] = list(id_to_name_map.values())  # 所有飞机的原始名称列表
+                                    snapshot["_all_mappings"] = all_mappings  # 完整的映射关系（包含飞机、设备、资源）
                                     
                                     if not snapshot:
                                         _logger.error(f"[#{idx+1}] 快照生成返回None")
@@ -533,12 +702,28 @@ def main():
                                         
                                         result_record["snapshot_file"] = conflict_snapshot_filepath
                                         stats["snapshots_generated"] += 1
+                                        
+                                        # 4.6.1.1 保存S文件（快照配置的JSON字符串，用于评分）
+                                        # 注意：虽然内容是JSON格式，但文件扩展名是 .txt（按评分规则要求）
+                                        scenario_num = get_scenario_number(event_id)
+                                        if scenario_num > 0:
+                                            try:
+                                                output_s_filename = f"任务三测试场景{scenario_num}_S_{args.team_name}.txt"
+                                                output_s_filepath = os.path.join(args.output_dir, output_s_filename)
+                                                os.makedirs(args.output_dir, exist_ok=True)
+                                                with open(output_s_filepath, 'w', encoding='utf-8') as f:
+                                                    json.dump(snapshot, f, ensure_ascii=False, indent=2)
+                                                _logger.info(f"[#{idx+1}] S文件已保存: {output_s_filepath}")
+                                                result_record["output_s_file"] = output_s_filepath
+                                            except Exception as e:
+                                                _logger.warning(f"[#{idx+1}] 保存S文件失败: {e}")
+                                                result_record["output_s_file"] = None
                             except Exception as e:
                                 _logger.error(f"[#{idx+1}] 生成快照配置失败: {e}", exc_info=True)
                                 result_record["snapshot_file"] = None
                             
-                            # 4. 调用强化学习重调度
-                            # 详细检查每个条件
+                            # 4.6.2 调用强化学习重调度（基于快照配置，使用RL算法生成新的调度方案）
+                            # 详细检查每个条件（确保所有必需的模块和函数都可用）
                             _rl_check_snapshot = snapshot is not None
                             _rl_check_available = _RL_AVAILABLE
                             _rl_check_function = infer_schedule_from_snapshot is not None
@@ -548,7 +733,7 @@ def main():
                             
                             if snapshot and _RL_AVAILABLE and infer_schedule_from_snapshot is not None and callable(infer_schedule_from_snapshot):
                                 try:
-                                    # 记录快照基本信息
+                                    # 4.6.2.1 记录快照基本信息（用于日志和调试）
                                     num_planes = len(snapshot.get("planes", []))
                                     num_occupied_stands = sum(1 for v in snapshot.get("stand_occupancy", {}).values() if v is not None)
                                     num_blocked_stands = len(snapshot.get("blocked_stands", []))
@@ -600,7 +785,7 @@ def main():
                                     _logger.info(f"[#{idx+1}]   - enable_dynres: {rl_args.enable_dynres}")
                                     _logger.info(f"[#{idx+1}]   - enable_space: {rl_args.enable_space}")
                                     
-                                    # 调用重调度
+                                    # 4.6.2.2 调用强化学习重调度（使用QMIX算法，基于快照配置生成新的调度方案）
                                     reschedule_info = infer_schedule_from_snapshot(
                                         rl_args,
                                         snapshot,
@@ -608,7 +793,7 @@ def main():
                                         max_steps=None  # 使用环境默认的episode_limit
                                     )
                                     
-                                    # 保存重调度结果
+                                    # 4.6.2.3 保存重调度结果（包含makespan、reward、episodes_situation、devices_situation等）
                                     reschedule_output = {
                                         "time": reschedule_info.get("time"),
                                         "reward": reschedule_info.get("reward"),
@@ -626,6 +811,21 @@ def main():
                                     result_record["reschedule_file"] = reschedule_filepath
                                     result_record["reschedule_makespan"] = reschedule_info.get("time")
                                     result_record["reschedule_reward"] = reschedule_info.get("reward")
+                                    
+                                    # 4.6.2.4 保存P文件（强化学习重调度计划的JSON，用于评分）
+                                    scenario_num = get_scenario_number(event_id)
+                                    if scenario_num > 0:
+                                        try:
+                                            output_p_filename = f"任务三测试场景{scenario_num}_P_{args.team_name}.json"
+                                            output_p_filepath = os.path.join(args.output_dir, output_p_filename)
+                                            os.makedirs(args.output_dir, exist_ok=True)
+                                            with open(output_p_filepath, 'w', encoding='utf-8') as f:
+                                                json.dump(reschedule_output, f, ensure_ascii=False, indent=2)
+                                            _logger.info(f"[#{idx+1}] P文件已保存: {output_p_filepath}")
+                                            result_record["output_p_file"] = output_p_filepath
+                                        except Exception as e:
+                                            _logger.warning(f"[#{idx+1}] 保存P文件失败: {e}")
+                                            result_record["output_p_file"] = None
                                     
                                     # 记录调度结果摘要
                                     makespan = reschedule_info.get("time", 0.0)
@@ -653,19 +853,20 @@ def main():
                                                     affected_planes.add(plane_id)
                                         _logger.info(f"[#{idx+1}]   - 受影响飞机数: {len(affected_planes)}")
                                     
-                                    # 5. 将重调度结果写回KG
+                                    # ==================== 4.7 将重调度结果写回KG ====================
+                                    # 将强化学习生成的调度方案转换为三元组，更新KG，形成闭环
                                     try:
                                         episodes_situation = reschedule_info.get("episodes_situation", [])
                                         if episodes_situation and schedule_to_kg_triples is not None and ScheduleEnv is not None:
                                             _logger.info(f"[#{idx+1}] 开始将重调度结果写回KG...")
                                             
-                                            # 从快照中获取飞机ID映射（数字ID -> 原始名称）
+                                            # 4.7.1 从快照中获取飞机ID映射（RL环境使用数字ID，KG使用原始名称，需要转换）
                                             id_to_name_map = snapshot.get("_aircraft_id_mapping", {})
                                             
                                             if not id_to_name_map:
                                                 _logger.warning(f"[#{idx+1}] 未找到飞机ID映射信息，将使用数字ID作为飞机名称")
                                             
-                                            # 将episodes_situation中的数字ID转换为原始飞机名称
+                                            # 4.7.2 将episodes_situation中的数字ID转换为原始飞机名称（飞机0 -> "飞机A001"）
                                             converted_episodes = []
                                             for ep in episodes_situation:
                                                 if len(ep) >= 4:
@@ -683,16 +884,16 @@ def main():
                                             
                                             _logger.debug(f"[#{idx+1}] 已将 {len(converted_episodes)} 个调度事件中的飞机ID转换为原始名称")
                                             
-                                            # 创建临时环境对象用于转换三元组
+                                            # 4.7.3 创建临时环境对象用于转换三元组（获取job_id到code的映射等）
                                             # 注意：这里使用rl_args，因为env需要这些参数来初始化
                                             temp_env = ScheduleEnv(rl_args)
                                             temp_env.reset(rl_args.n_agents)
                                             
-                                            # 将转换后的episodes_situation转换为三元组
+                                            # 4.7.4 将转换后的episodes_situation转换为三元组（飞机名称、作业、停机位等）
                                             # schedule_to_kg_triples 期望 plane_id 是数字，但我们已经转换为名称字符串
                                             # 需要创建一个包装函数来处理名称格式
                                             def convert_episodes_with_names(episodes, env):
-                                                """将包含名称的episodes转换为三元组"""
+                                                """将包含名称的episodes转换为三元组（主语-谓词-宾语格式）"""
                                                 triples = []
                                                 id2code = env.jobs_obj.id2code()  # job_id -> "ZY_*"
                                                 for ep in sorted(episodes, key=lambda x: x[0]):
@@ -731,8 +932,8 @@ def main():
                                             
                                             triples = convert_episodes_with_names(converted_episodes, temp_env)
                                             
+                                            # 4.7.5 将三元组写回KG（更新飞机的状态、位置、作业等信息）
                                             if triples and exp.kg_service:
-                                                # 写回KG
                                                 exp.kg_service.kg.update_with_triples(triples)
                                                 
                                                 # 统计更新的信息
@@ -772,20 +973,14 @@ def main():
                             elif not snapshot:
                                 _logger.warning(f"[#{idx+1}] 快照配置生成失败，跳过重调度")
                         
-                        break  # 单条事件，处理完即退出
+                        break  # 单条事件，处理完即退出（batch_size=1，一次只处理一条）
                 except Exception as e:
                     _logger.error(f"[#{idx+1}] 大模型冲突判定失败: {e}")
                     result_record["compliance"] = "ERROR"
             
-            # 4. 更新KG（无论是否冲突）
-            try:
-                if exp.kg_service:
-                    exp.kg_service.extract_and_update(event_text)
-                    _logger.debug(f"[#{idx+1}] KG已更新")
-            except Exception as e:
-                _logger.warning(f"[#{idx+1}] KG更新失败: {e}")
+            # 注意：KG更新已在事件处理开始时就完成（步骤4.2），这里不需要重复更新
             
-            # 保存结果
+            # 4.8 保存处理结果（每条事件处理完成后，立即保存到结果文件）
             try:
                 with open(conflict_results_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(result_record, ensure_ascii=False) + "\n")
@@ -796,7 +991,8 @@ def main():
             _logger.error(f"[#{idx+1}] 处理事件失败: {e}")
             continue
     
-    # 输出统计信息
+    # ==================== 5. 后处理阶段 ====================
+    # 输出统计信息（总事件数、潜在冲突数、确认冲突数、生成快照数等）
     _logger.info("=" * 60)
     _logger.info("[STATS] 处理完成统计:")
     _logger.info(f"  总事件数: {stats['total_events']}")

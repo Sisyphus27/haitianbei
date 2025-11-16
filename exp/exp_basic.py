@@ -1,18 +1,19 @@
-'''
-Author: zy
-Date: 2025-10-22 17:30:41
-LastEditTime: 2025-10-22 17:34:04
-LastEditors: zy
-Description: 
-FilePath: haitianbei/exp/exp_basic.py
+"""
+基础实验类：提供模型加载和设备管理的基础功能
 
-'''
+功能：
+1. 设备管理：自动检测并使用GPU或CPU
+2. 模型构建：定义模型构建接口（由子类实现）
+3. 参数初始化：管理实验参数和设备配置
+
+在stream-judge模式中的作用：
+- 为Exp_main提供基础框架，处理设备选择、模型初始化等通用功能
+"""
+
 import os
 import numpy as np
 from typing import Any, cast
 import logging as _logging
-
-# 使 torch 变为可选依赖：若不可用则走 CPU/空模型逻辑
 try:
     import torch as torch_mod
     TORCH_AVAILABLE = True

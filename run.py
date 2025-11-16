@@ -1,9 +1,17 @@
 #!/usr/bin/env python
 """
-简洁入口：所有模式统一从 Exp_main.run() 进入
-保留功能：
- - train:         对 Qwen3-4B 进行 LoRA 训练
- - stream-judge:  事件流判冲突（读取文本 -> 抽取三元组 -> 构建/更新KG -> LLM 判冲突）
+程序入口：命令行参数解析和路由
+
+支持三种运行模式：
+- train: LoRA模型训练模式
+- stream-judge: 事件流冲突判定模式（从事件文本中抽取时空信息并判定冲突）
+- marl-train: 强化学习训练模式
+
+在stream-judge模式下：
+1. 读取事件文件（JSONL格式，每行一条事件）
+2. 使用大语言模型抽取时空信息和判定冲突
+3. 将结果保存为JSONL格式
+4. 可选：自动导出为任务一评分规则格式的JSON文件
 """
 
 import os
@@ -125,8 +133,10 @@ def main():
                         help="1=抽取+冲突判定；0=仅抽取时空信息(不输出判定/reason/suggest)")
     # 任务一评分规则格式导出：将流式判定的 JSONL 重组为 {time, 时空信息 01, 时空信息 02, ...} 数组 JSON 文件
     parser.add_argument("--export_task1_json",
-                        default=os.path.join(default_root, "results", "task1", "task1_result.json"),
-                        help="任务一格式最终结果文件路径(默认: results/task1/task1_result.json)。生成数组，每元素包含 time + 时空信息 01..NN")
+                        default=None,
+                        help="任务一格式最终结果文件路径。生成数组，每元素包含 time + 时空信息 01..NN。若未指定，可通过--auto_export_task1自动导出")
+    parser.add_argument("--auto_export_task1", action="store_true", default=False,
+                        help="自动导出任务一格式（仅stream-judge模式）。若启用且未指定--export_task1_json，则使用默认路径导出")
     parser.add_argument("--print_decomposition", action="store_true", default=False, help="在判定前打印分解器输出(JSON)")
     # 预热控制
     parser.add_argument("--no_warmup", action="store_true", default=False, help="禁用模型预热（首次推理会更慢）")

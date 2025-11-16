@@ -1,20 +1,19 @@
 """
-轻量级三元组抽取器（规则基线）
+三元组提取模块：从事件文本中抽取结构化信息
 
-功能
-- 从中文运行日志中抽取多三元组，覆盖常见航空地面调度要素：飞机ID、动作、跑道、坐标、速度、车辆待命等。
-- 一句文本可产生多个 (主语, 谓词, 宾语) 三元组。
+功能：
+1. 实体识别：识别飞机、停机位、跑道、设备等实体
+2. 关系抽取：提取实体之间的关系（如"使用"、"位于"、"执行"等）
+3. 时间解析：提取和规范化时间信息
+4. 状态提取：识别飞机的动作状态（着陆、起飞、滑行等）
+5. 资源提取：提取资源分配信息（停机位、设备使用等）
 
-为什么先上规则基线
-- 您的数据中术语较稳定（如“飞机A001”“着陆跑道Z”“坐标(x，y)”等），规则法轻量、可解释、零训练即可运行。
-- 后续可在此基础上平滑替换为轻量模型（DistilBERT 等）做关系判别。
+在stream-judge模式中的作用：
+- 从事件文本中提取三元组（主语-谓词-宾语）
+- 为知识图谱更新提供结构化输入
+- 支持多种航空地面调度场景的文本模式识别
 
-用法
->>> from models.triples_extraction import extract_triples
->>> text = "时间：2025年7月1日 08:00:00，信息：飞机A001开始着陆，使用着陆跑道Z，坐标(60，260)，速度15.2米/秒；系统检测到5号牵引车待命于着陆跑道。"
->>> extract_triples(text)
-
-日期: 2025-10-23
+使用规则基线方法，适用于术语稳定的领域文本，具有轻量、可解释、零训练的优势。
 """
 
 from __future__ import annotations
@@ -427,6 +426,71 @@ def extract_triples(text: str) -> List[Triple]:
 						_add(triples, seen, (ac, "使用设备", tk))
 
 		# （已前移到飞机循环外）
+
+	# 10) 故障相关三元组抽取
+	# 10.1) 设备故障：{停机位号}号停机位{设备名称}{故障描述}；{作业}暂停/无法启动
+	# 示例：5号停机位供电接口异常；作业暂停
+	#      24号停机位供氮终端连接失败；加氮作业无法启动
+	device_failure_pattern = r"(\d+)号停机位(供电接口|污水处理装置|供氮终端|清洗装置|供气|供氧阀门|液压软管|液压泵|供氮管路)(异常|连接失败|压力异常|水压不足|短路|卡滞|破裂|过热报警|堵塞|故障)"
+	for stand_num, device_name, failure_type in re.findall(device_failure_pattern, text):
+		stand_name = f"停机位{stand_num}"
+		# 规范化设备名称（映射到固定设备编号或保持原样）
+		device_normalized = device_name
+		# 尝试映射到固定设备（如果需要）
+		if device_name == "供电接口":
+			device_normalized = f"{stand_num}号供电接口"  # 可能需要进一步映射到FR设备
+		elif device_name == "污水处理装置":
+			device_normalized = f"{stand_num}号污水处理装置"
+		elif device_name == "供氮终端":
+			device_normalized = f"{stand_num}号供氮终端"
+		elif device_name == "清洗装置":
+			device_normalized = f"{stand_num}号清洗装置"
+		elif device_name == "供气":
+			device_normalized = f"{stand_num}号供气"
+		elif device_name == "供氧阀门":
+			device_normalized = f"{stand_num}号供氧阀门"
+		elif device_name == "液压软管":
+			device_normalized = f"{stand_num}号液压软管"
+		elif device_name == "液压泵":
+			device_normalized = f"{stand_num}号液压泵"
+		elif device_name == "供氮管路":
+			device_normalized = f"{stand_num}号供氮管路"
+		
+		_add(triples, seen, (stand_name, "设备故障", device_normalized))
+		_add(triples, seen, (device_normalized, "故障类型", failure_type))
+	
+	# 10.2) 停机位故障：编号 {范围} 等 {数量} 个停机位故障不可用，不可用时间均为{时间}分钟
+	# 示例：编号 10-15 等 6 个停机位故障不可用，不可用时间均为30分钟
+	stand_failure_pattern = r"编号\s*(\d+)[-~](\d+)\s*等\s*(\d+)\s*个停机位故障不可用[，,]?\s*不可用时间均为\s*(\d+)\s*分钟"
+	for start_num, end_num, count, duration in re.findall(stand_failure_pattern, text):
+		start_id = int(start_num)
+		end_id = int(end_num)
+		duration_min = int(duration)
+		# 为范围内的每个停机位添加故障三元组
+		for stand_id in range(start_id, end_id + 1):
+			stand_name = f"停机位{stand_id}"
+			_add(triples, seen, (stand_name, "停机位故障", str(duration_min)))
+	
+	# 10.3) 故障恢复：{设备名称}修复完成/恢复；{飞机}{作业}恢复
+	# 示例：供电接口修复完成；飞机A008供电作业恢复
+	#      污水处理装置恢复；飞机A010污水处理作业恢复
+	recovery_pattern = r"((?:供电接口|污水处理装置|供氮终端|清洗装置|供气|供氧阀门|液压软管|液压泵|供氮管路))(修复完成|恢复)[；;]\s*(?:飞机([A-Za-z0-9]+))?([^恢复]*作业)?恢复"
+	for device_name, recovery_type, aircraft_id, job_type in re.findall(recovery_pattern, text):
+		# 设备恢复
+		device_normalized = device_name  # 可能需要进一步规范化
+		_add(triples, seen, (device_normalized, "故障恢复", recovery_type))
+		# 如果有飞机信息，添加飞机相关的恢复三元组
+		if aircraft_id:
+			_add(triples, seen, (f"飞机{aircraft_id}", "作业恢复", job_type if job_type else "作业"))
+	
+	# 10.4) 特殊故障：下一架降落飞机将因故障必须停在 {停机位} 号停机位修理，修理时间为 {时间}分钟
+	# 示例：下一架降落飞机将因故障必须停在 5 号停机位修理，修理时间为 30分钟
+	special_failure_pattern = r"下一架降落飞机将因故障必须停在\s*(\d+)\s*号停机位修理[，,]?\s*修理时间为\s*(\d+)\s*分钟"
+	for stand_num, repair_duration in re.findall(special_failure_pattern, text):
+		stand_name = f"停机位{stand_num}"
+		repair_min = int(repair_duration)
+		_add(triples, seen, (stand_name, "停机位故障", str(repair_min)))
+		_add(triples, seen, (stand_name, "故障类型", "修理"))
 
 	return triples
 

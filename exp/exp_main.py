@@ -1,15 +1,21 @@
-r"""
-Author: zy
-Date: 2025-10-22 17:35:46
-LastEditTime: 2025-10-23 19:49:44
-LastEditors: zy
-Description:
-FilePath: haitianbei/exp/exp_main.py
+"""
+主实验类：实现stream-judge模式的核心逻辑
 
+功能：
+1. 模型加载与管理：加载judge模型和可选的decomposer模型
+2. 事件流处理：从事件文件中读取事件，进行批量或单条处理
+3. 冲突判定：使用大语言模型抽取时空信息并判定冲突
+4. 知识图谱集成：与Neo4j知识图谱交互，查询上下文并更新图谱
+5. 结果导出：将判定结果保存为JSONL格式，支持导出为任务一格式
+
+在stream-judge模式下的工作流程：
+1. 初始化模型和知识图谱连接
+2. 读取事件文件和规则文档
+3. 对每个事件：提取三元组 -> 更新KG -> 构建prompt -> 调用LLM -> 解析结果 -> 保存输出
+4. 可选的KG上下文查询用于增强prompt
+5. 处理完成后自动导出任务一格式（如果启用）
 """
 
-# 兼容直接"运行本文件"的调试方式：确保项目根目录在 sys.path
-# 这样即使用 "python exp/exp_main.py" 启动，也能导入顶层包（exp、utils、data_provider）。
 import os as _os
 import sys as _sys
 
@@ -134,7 +140,7 @@ class Exp_main(Exp_Basic):
 
         super(Exp_main, self).__init__(args)
         self._defer_model_init = False
-        # 确保 base_model_dir/decomp_base_model_dir 在 _build_model 调用前可用
+        # 确保 base_model_dir/decomp_base_model_dir/judge_base_model_dir 在 _build_model 调用前可用
         raw_base_model_dir = getattr(args, "base_model_dir", None)
         if isinstance(raw_base_model_dir, str) and raw_base_model_dir:
             base_model_dir = raw_base_model_dir
@@ -145,6 +151,13 @@ class Exp_main(Exp_Basic):
             )
         setattr(args, "base_model_dir", base_model_dir)
         self.base_model_dir = base_model_dir
+        
+        # 处理 judge_base_model_dir：如果未指定，使用 base_model_dir 作为默认值
+        judge_arg = getattr(args, "judge_base_model_dir", None)
+        judge_dir = judge_arg if isinstance(judge_arg, str) and judge_arg else base_model_dir
+        setattr(args, "judge_base_model_dir", judge_dir)
+        self.judge_base_model_dir = judge_dir
+        
         decomp_arg = getattr(args, "decomp_base_model_dir", None)
         decomp_dir = decomp_arg if isinstance(decomp_arg, str) and decomp_arg else base_model_dir
         setattr(args, "decomp_base_model_dir", decomp_dir)
@@ -285,8 +298,9 @@ class Exp_main(Exp_Basic):
         prefer_device = str(getattr(self.args, "device", "auto"))
         target_device = _resolve_device(prefer_device)
 
-        # 统一模型路径来源：完全依赖 __init__ 中从 args 注入的 base_model_dir / decomp_base_model_dir
+        # 统一模型路径来源：完全依赖 __init__ 中从 args 注入的 base_model_dir / judge_base_model_dir / decomp_base_model_dir
         base_model_dir = self.base_model_dir
+        judge_model_dir = self.judge_base_model_dir
 
         # 校验 Transformers 模型目录（避免误传 GGUF 目录导致报错）
         def _is_transformers_dir(path: str) -> bool:
@@ -331,7 +345,15 @@ class Exp_main(Exp_Basic):
                 setattr(self.args, "base_model_dir", fallback)
             except Exception:
                 pass
-
+        
+        # 校验 judge_base_model_dir
+        if not _is_transformers_dir(judge_model_dir):
+            _logging.warning(
+                f"[MODEL] judge_base_model_dir 无效或为 GGUF: {judge_model_dir}，回退到 base_model_dir"
+            )
+            judge_model_dir = base_model_dir
+        self.judge_base_model_dir = judge_model_dir
+        
         decomp_model_dir = self.decomp_base_model_dir or base_model_dir
         if not _is_transformers_dir(decomp_model_dir):
             _logging.warning(
@@ -610,7 +632,8 @@ class Exp_main(Exp_Basic):
             return handle
 
         handles: Dict[str, Dict[str, Any]] = {}
-        handles["judge"] = _load_handle(base_model_dir, judge_lora_dir, "judge")
+        # 加载 judge 模型：优先使用 judge_base_model_dir，如果未指定则回退到 base_model_dir
+        handles["judge"] = _load_handle(judge_model_dir, judge_lora_dir, "judge")
 
         # 仅在明确需要时加载分解器：启用标志或要求打印分解结果
         _need_decomp = bool(
@@ -835,7 +858,7 @@ class Exp_main(Exp_Basic):
         
         # 读取事件列表
         try:
-            events = load_events_from_file(events_file)
+            events = load_events_from_file(events_file)[:10]
         except Exception:
             with open(events_file, "r", encoding="utf-8") as f:
                 events = [ln.strip() for ln in f if ln.strip()]
@@ -881,11 +904,34 @@ class Exp_main(Exp_Basic):
         
         _logging.info("=== Stream Judge End ===")
         
-        # 导出任务一格式（若指定路径）
+        # 导出任务一格式（若指定路径或启用自动导出）
         export_path = getattr(self.args, "export_task1_json", None)
+        auto_export = bool(getattr(self.args, "auto_export_task1", False))
+        
+        # 如果启用了自动导出且未指定导出路径，使用默认路径
+        if auto_export and not export_path:
+            # 基于 _judge_out_file 生成默认路径：将 model_outputs/judge 替换为 task1，扩展名改为 .json
+            if hasattr(self, "_judge_out_file") and self._judge_out_file:
+                default_dir = os.path.join(self.root, "results", "task1")
+                os.makedirs(default_dir, exist_ok=True)
+                # 从 _judge_out_file 中提取时间戳，生成默认文件名
+                base_name = os.path.basename(self._judge_out_file)
+                # 去掉 .jsonl 扩展名，添加 .json
+                if base_name.endswith(".jsonl"):
+                    base_name = base_name[:-6] + ".json"
+                else:
+                    base_name = base_name + ".json"
+                export_path = os.path.join(default_dir, base_name)
+                _logging.info(f"[AUTO-EXPORT] 自动导出路径: {export_path}")
+            else:
+                # 如果没有 _judge_out_file，使用默认路径
+                export_path = os.path.join(self.root, "results", "task1", f"stream_{self._session_ts}.json")
+                _logging.info(f"[AUTO-EXPORT] 使用默认路径: {export_path}")
+        
         if export_path:
             try:
                 self.export_task1_results(out_path=export_path)
+                _logging.info(f"[EXPORT-TASK1] 导出成功: {export_path}")
             except Exception as e:
                 _logging.warning(f"[EXPORT-TASK1] 导出失败: {e}")
         
@@ -931,10 +977,16 @@ class Exp_main(Exp_Basic):
             md = re.sub(r"\s+", " ", md)
             md = "\n".join([ln.rstrip() for ln in md.splitlines() if ln.strip() != ""])
             
-            # 限制规则文档长度（最多5000字符）
-            if len(md) > 5000:
+            # 限制规则文档长度（冲突判定模式：最多1500字符；小模型模式：最多1500字符）
+            original_length = len(md)
+            # 冲突判定模式：减少到1500字符以缩短prompt
+            max_length = 1500
+            if len(md) > max_length:
                 # 优先保留前面的内容（通常是总则和重要规则）
-                md = md[:5000] + "\n\n[规则文档已截断，仅保留前5000字符]"
+                md = md[:max_length] + "\n\n[规则文档已截断，仅保留前1500字符]"
+                _logging.debug(f"[RULES] 规则文档已截断：{original_length} -> {len(md)} 字符")
+            else:
+                _logging.debug(f"[RULES] 规则文档长度: {original_length} 字符")
             
             # 冲突判定模式的前缀
             prefix = (
@@ -959,6 +1011,7 @@ class Exp_main(Exp_Basic):
     *,
     simple: bool = False,
     conflict_judge: bool = True,
+    decomp_text: Optional[str] = None,
         ) -> str:
         """根据模式构造提示。
 
@@ -1023,76 +1076,236 @@ class Exp_main(Exp_Basic):
         else:
             instruction = (
                 "任务：基于规则+KG判定事件是否冲突，并给出重调度建议。\n\n"
-                "【重要】输出要求：\n"
-                "1. 只输出一个 JSON 对象，且必须放在 JSON_START 与 JSON_END 之间。\n"
-                "2. 不得出现任何额外文字、Markdown代码块、解释或说明。\n"
-                "3. JSON对象必须包含以下三个字段（按顺序）：\n\n"
-                "【必需字段】\n"
-                "1) \"判定\"（必需）：必须是 \"合规\" 或 \"冲突\" 之一，不能为空或缺失。这是最重要的字段，缺失将导致解析失败。\n"
-                "2) \"reason\"（必需）：冲突/合规的精炼依据，1-3 条短句组成的数组；无则 []。\n"
-                "3) \"suggest\"（必需）：操作性建议；若合规填 \"无\"。若冲突，必须明确指出哪些飞机需要重新调度（格式：[\"飞机A001\", \"飞机A002\"]）。\n\n"
-                "【输出示例】\n"
-                "以下是正确的输出格式示例：\n"
+                "输出格式（必须严格遵守）：\n"
                 "JSON_START\n"
                 "{\n"
-                '  "判定": "冲突",\n'
-                '  "reason": ["5号停机位供电接口异常，导致作业暂停"],\n'
-                '  "suggest": ["飞机A008"]\n'
+                '  "判定": "合规" 或 "冲突",\n'
+                '  "reason": ["依据1", "依据2"],\n'
+                '  "suggest": ["飞机A001"] 或 "无"\n'
                 "}\n"
                 "JSON_END\n\n"
-                "【严格约束】\n"
-                "- \"判定\"字段是必需的，必须为 \"合规\" 或 \"冲突\"，不能为空、null或缺失。\n"
-                "- 不得输出时空信息、时间等字段。\n"
-                "- 不得输出示例、解释或代码围栏以外文本。\n"
-                "- JSON必须能被标准JSON解析器解析。\n\n"
-                "【最终输出格式（仅以下三行）】\n"
-                "JSON_START\n"
-                "{...}\n"
-                "JSON_END"
+                "要求：\n"
+                "1. 只输出JSON，位于JSON_START和JSON_END之间\n"
+                "2. 只能有三个字段：\"判定\"、\"reason\"、\"suggest\"\n"
+                "3. 禁止输出\"event\"、\"result\"、\"time\"等字段\n"
+                "4. 禁止输出任何非JSON内容"
             )
-        parts = [instruction, rules_text, kg_text, "【事件】\n" + event_text]
-        return "\n\n".join([p for p in parts if p])
+        
+        # 改进KG文本格式：添加明确的标记区分输入和输出
+        # 将KG文本格式改为更明确的标记，避免格式混淆
+        kg_formatted = kg_text.strip() if kg_text else ""
+        if kg_formatted:
+            # 如果还没有添加标记，则添加明确的"仅供参考"标记
+            # 移除原有的"【KG状态】"标记（如果有），替换为更明确的标记
+            if kg_formatted.startswith("【KG状态】"):
+                kg_formatted = kg_formatted.replace("【KG状态】", "【KG状态（仅供参考，不要模仿此格式，必须输出JSON）】", 1)
+            elif not kg_formatted.startswith("【KG状态（"):
+                # 如果没有标记，添加新的标记
+                kg_formatted = "【KG状态（仅供参考，不要模仿此格式，必须输出JSON）】\n" + kg_formatted
+        
+        # 构建prompt parts
+        parts = [instruction]
+        
+        # 如果有小模型分解结果，整合到prompt中
+        decomp_formatted = None
+        if decomp_text and decomp_text.strip():
+            decomp_raw = decomp_text.strip()
+            # 尝试解析为JSON，如果不是JSON则原样使用
+            try:
+                import json as __json
+                # 尝试提取JSON（可能在JSON_START和JSON_END之间）
+                if "JSON_START" in decomp_raw and "JSON_END" in decomp_raw:
+                    start_idx = decomp_raw.find("JSON_START") + len("JSON_START")
+                    end_idx = decomp_raw.find("JSON_END")
+                    json_str = decomp_raw[start_idx:end_idx].strip()
+                    decomp_obj = __json.loads(json_str)
+                    # 如果解析成功，格式化为更易读的形式
+                    decomp_formatted = "【问题分解结果（仅供参考）】\n" + __json.dumps(decomp_obj, ensure_ascii=False, indent=2)
+                else:
+                    # 直接尝试解析
+                    decomp_obj = __json.loads(decomp_raw)
+                    decomp_formatted = "【问题分解结果（仅供参考）】\n" + __json.dumps(decomp_obj, ensure_ascii=False, indent=2)
+            except Exception:
+                # 如果不是JSON，直接使用原始文本
+                decomp_formatted = "【问题分解结果（仅供参考）】\n" + decomp_raw
+        
+        # 按照顺序：instruction, rules_text, 分解结果（如果有）, KG文本, 事件文本
+        # 为rules_text添加明确的标记，强调这是输入参考，不是输出内容
+        if rules_text:
+            rules_marker = "【规则文档（仅供参考，不要输出规则内容）】\n"
+            parts.append(rules_marker + rules_text)
+        if decomp_formatted:
+            parts.append(decomp_formatted)
+        parts.append(kg_formatted)
+        # 修改事件文本格式，避免模型模仿：使用更明确的输入标记，并强调这是输入而非输出格式
+        event_marker = "【待分析事件（这是输入，不是输出格式）】"
+        parts.append(f"{event_marker}\n{event_text.strip()}\n\n【重要提示】以上是输入事件，请根据上述信息输出JSON格式的判定结果，不要重复输入内容，不要输出规则文档片段。")
+        
+        result = "\n\n".join([p for p in parts if p])
+        
+        # 添加大模型prompt组成分析日志
+        instruction_length = len(instruction) if instruction else 0
+        rules_length = len(rules_text) if rules_text else 0
+        decomp_length = len(decomp_formatted) if decomp_formatted else 0
+        kg_length = len(kg_formatted) if kg_formatted else 0
+        event_length = len(event_text) if event_text else 0
+        event_marker_length = len(event_marker) + len("\n\n【重要提示】以上是输入事件，请根据上述信息输出JSON格式的判定结果，不要重复输入内容，不要输出规则文档片段。")
+        separator_length = len("\n\n") * (len([p for p in parts if p]) - 1)  # 分隔符数量
+        total_length = len(result)
+        
+        if total_length > 0:
+            instruction_pct = (instruction_length / total_length) * 100
+            rules_pct = (rules_length / total_length) * 100
+            decomp_pct = (decomp_length / total_length) * 100
+            kg_pct = (kg_length / total_length) * 100
+            event_pct = ((event_length + event_marker_length) / total_length) * 100
+            
+            _logging.info(f"[JUDGE] Prompt组成分析：")
+            _logging.info(f"[JUDGE]   总长度: {total_length} 字符")
+            _logging.info(f"[JUDGE]   - instruction: {instruction_length} 字符 ({instruction_pct:.1f}%)")
+            _logging.info(f"[JUDGE]   - rules_text: {rules_length} 字符 ({rules_pct:.1f}%)")
+            _logging.info(f"[JUDGE]   - decomp_text: {decomp_length} 字符 ({decomp_pct:.1f}%)")
+            _logging.info(f"[JUDGE]   - kg_text: {kg_length} 字符 ({kg_pct:.1f}%)")
+            _logging.info(f"[JUDGE]   - event_text + 标记: {event_length + event_marker_length} 字符 ({event_pct:.1f}%)")
+            _logging.info(f"[JUDGE]   - 分隔符: {separator_length} 字符")
+            
+            # 警告过长prompt
+            if total_length > 8000:
+                _logging.warning(f"[JUDGE] 警告：Prompt总长度过长（{total_length}字符），可能导致模型处理困难")
+            if rules_pct > 60:
+                _logging.warning(f"[JUDGE] 警告：规则文档占比过高（{rules_pct:.1f}%），可能干扰模型输出")
+            
+            # 动态截断：如果总长度超过2000字符，按优先级减少各部分
+            # 优先级：kg_text（边关系）> rules_text > instruction
+            target_length = 2000
+            if total_length > target_length:
+                excess = total_length - target_length
+                _logging.warning(f"[JUDGE] Prompt总长度({total_length}字符)超过目标({target_length}字符)，开始动态截断，超出{excess}字符")
+                
+                # 1. 优先减少kg_text（边关系部分）
+                if kg_length > 0 and excess > 0:
+                    # 尝试从kg_text中减少边关系，保留状态属性
+                    # 这里简化处理：直接截断kg_text
+                    reduce_kg = min(excess, int(kg_length * 0.5))  # 最多减少50%
+                    if reduce_kg > 0:
+                        kg_formatted = kg_formatted[:max(100, len(kg_formatted) - reduce_kg)]
+                        excess -= reduce_kg
+                        _logging.info(f"[JUDGE] 已减少kg_text: {reduce_kg}字符")
+                
+                # 2. 其次减少rules_text
+                if rules_length > 0 and excess > 0:
+                    reduce_rules = min(excess, int(rules_length * 0.3))  # 最多减少30%
+                    if reduce_rules > 0:
+                        # 需要重新构建rules_text，这里简化处理：在调用build_rules_prompt时已经限制
+                        # 如果还是太长，进一步截断
+                        if rules_text and len(rules_text) > 1000:
+                            rules_text = rules_text[:1000] + "\n\n[规则文档已进一步截断]"
+                            excess -= (len(rules_text) - 1000)
+                            _logging.info(f"[JUDGE] 已进一步减少rules_text")
+                
+                # 3. 最后减少instruction（如果还是太长）
+                if excess > 0 and instruction_length > 200:
+                    reduce_inst = min(excess, instruction_length - 200)  # 保留至少200字符
+                    if reduce_inst > 0:
+                        instruction = instruction[:len(instruction) - reduce_inst]
+                        _logging.info(f"[JUDGE] 已减少instruction: {reduce_inst}字符")
+                
+                # 重新构建result
+                parts = [instruction]
+                if rules_text:
+                    parts.append(rules_text)
+                if decomp_formatted:
+                    parts.append(decomp_formatted)
+                if kg_formatted:
+                    parts.append(kg_formatted)
+                parts.append(f"{event_marker}\n{event_text.strip()}\n\n【重要提示】以上是输入事件，请根据上述信息输出JSON格式的判定结果，不要重复输入内容，不要输出规则文档片段。")
+                result = "\n\n".join([p for p in parts if p])
+                
+                final_length = len(result)
+                _logging.info(f"[JUDGE] 动态截断完成：{total_length} -> {final_length} 字符")
+        else:
+            _logging.warning("[JUDGE] Prompt总长度为0，无法计算占比")
+        
+        return result
 
     def _format_decompose_prompt(
         self, event_text: str, rules_text: str, kg_text: str
     ) -> str:
-        """为小LLM构造问题分解提示，要求输出 JSON 结构，聚焦三类冲突。
+        """为小LLM构造问题分解提示，仅做实体抽取。
 
         目标输出示例（说明用，不要抄写内容）：
         JSON_START
-        {"entities": ["飞机A001", "跑道Z"], "applicable_rules": ["……"], "potential_conflicts": [], "evidence": [], "notes": "none"}
+        {"entities": ["飞机A001", "飞机B002"]}
         JSON_END
 
-        说明：小模型参数量较小，移除 KG 文本上下文，仅保留规则文档与事件文本，以降低提示长度并减少幻觉概率。
+        说明：小模型参数量较小，仅做实体抽取工作，移除其他复杂任务以降低难度和减少错误输出。
         """
-        # 强化版分解指令：将指令置顶，严格禁止代码块与额外文本，加入 JSON_START/JSON_END 约束
+        # 简化版指令：仅做实体抽取，不涉及规则匹配、冲突检测等复杂任务
         instruction = (
-            "你是一名严格的时空作业分解器。\n"
-            "只做结构化分解，不做最终合规/冲突判定。\n"
-            "输出要求（必须全部满足）：\n"
-            "- 仅输出一个 JSON 对象，且必须位于 JSON_START 与 JSON_END 两行之间。\n"
-            "- 严禁在 JSON 外输出任意文字、提示、说明、前后缀或空行。\n"
-            "- 严禁使用任何 Markdown 代码块（例如 ``` 或 ```json）。出现即视为错误输出。\n"
-            "- 所有键名与字符串值均使用英文双引号。\n"
-            "JSON 字段与约束：\n"
-            "{\n"
-            '  "entities": [str,...],            // 事件中出现的关键实体（飞机/跑道/停机位/牵引车）；按出现顺序去重；最多10个\n'
-            '  "applicable_rules": [str,...],    // 可能相关的规则要点，涵盖互斥/占用/许可/依赖/状态一致性/转运约束/设备范围；每条≤40字；最多8条\n'
-            '  "potential_conflicts": [str,...], // 基于 KG 状态推测的潜在冲突（如：跑道Z 已被占用）；最多5条；若无则 []\n'
-            '  "evidence": [str,...],            // (可缺省) 支撑片段：KG 三元组或节点状态，如 "飞机A001 -[占用]-> 跑道Z"；可空\n'
-            '  "notes": ""                  // 当 potential_conflicts 为空填 "none"，否则填空字符串\n'
-            "}\n"
-            "操作步骤提示（不要输出这些步骤本身）：\n"
-            "1. 抽取实体：仅使用事件文本中出现的名词，不合并不臆造。\n"
-            "2. 匹配规则：提炼短句，不粘贴整段原文，不生成训练外条目。\n"
-            "3. 列举潜在冲突：仅在 KG 提示存在占用/互斥/依赖未满足/等待未达/范围不足/时序违法时填写；否则置空。\n"
-            "最终仅按如下三行输出：\n"
-            "JSON_START\n{...}\nJSON_END"
+            "【任务】从事件文本中抽取飞机实体名称。\n\n"
+            "【输出格式（必须严格遵守）】\n"
+            "只输出以下格式，不要输出任何其他内容：\n"
+            "JSON_START\n"
+            '{"entities": ["飞机A001", "飞机B002"]}\n'
+            "JSON_END\n\n"
+            "【严格要求】\n"
+            "1. 必须输出JSON格式，且必须位于JSON_START和JSON_END之间\n"
+            "2. JSON对象只有一个字段：\"entities\"，值是字符串数组\n"
+            "3. 严禁输出任何非JSON内容（包括解释、说明、重复的事件文本等）\n"
+            "4. 严禁输出Markdown代码块（```json等）\n"
+            "5. 严禁输出重复的文本或结构化信息\n"
+            "6. 输出JSON后立即停止，不要继续生成\n\n"
+            "【抽取规则】\n"
+            "1. 只抽取以'飞机'开头的实体，例如'飞机A001'、'飞机B002'\n"
+            "2. 不要包含停机位、跑道、牵引车、设备、故障设备等信息\n"
+            "3. 如果没有飞机实体，输出：{\"entities\": []}\n\n"
+            "【正确示例】\n"
+            "输入：\"飞机A001着陆完成；5号牵引车开始牵引飞机A001滑行至14号停机位\"\n"
+            "输出：\n"
+            "JSON_START\n"
+            '{"entities": ["飞机A001"]}\n'
+            "JSON_END\n\n"
+            "【错误示例（禁止）】\n"
+            "- 输出故障设备信息\n"
+            "- 输出停机位信息\n"
+            "- 输出重复的结构化信息\n"
+            "- 输出JSON外的任何文字\n\n"
+            "【现在开始】抽取以下事件文本中的飞机实体（只输出JSON，不要输出其他内容）："
         )
-        # 将指令置顶，减少模型在阅读上下文后先行复述的可能
-        # 仅保留 instruction + rules_text + 事件文本；不再拼接 kg_text
-        parts = [instruction, rules_text, "【事件】\n" + event_text]
-        return "\n\n".join([p for p in parts if p])
+        # 简化prompt：仅保留 instruction + 事件文本；移除rules_text以减少干扰
+        parts = [instruction, "【事件】\n" + event_text]
+        result = "\n\n".join([p for p in parts if p])
+        
+        # 验证prompt是否完整
+        if not result or not result.strip():
+            _logging.warning("[DECOMP] 警告：生成的prompt为空")
+        if not instruction or not instruction.strip():
+            _logging.warning("[DECOMP] 警告：instruction为空")
+        if not event_text or not event_text.strip():
+            _logging.warning("[DECOMP] 警告：event_text为空")
+        
+        # 详细的prompt组成分析（只统计实际包含在prompt中的部分）
+        instruction_length = len(instruction) if instruction else 0
+        event_length = len(event_text) if event_text else 0
+        event_marker_length = len("【事件】\n")
+        separator_length = len("\n\n")  # 分隔符
+        total_length = len(result)
+        
+        # 计算各部分占比
+        if total_length > 0:
+            instruction_pct = (instruction_length / total_length) * 100
+            event_pct = ((event_length + event_marker_length) / total_length) * 100
+            separator_pct = (separator_length / total_length) * 100
+            
+            _logging.info(f"[DECOMP] Prompt组成分析：")
+            _logging.info(f"[DECOMP]   总长度: {total_length} 字符")
+            _logging.info(f"[DECOMP]   - instruction: {instruction_length} 字符 ({instruction_pct:.1f}%)")
+            _logging.info(f"[DECOMP]   - event_text + 标记: {event_length + event_marker_length} 字符 ({event_pct:.1f}%)")
+            _logging.info(f"[DECOMP]   - 分隔符: {separator_length} 字符 ({separator_pct:.1f}%)")
+        else:
+            _logging.warning("[DECOMP] Prompt总长度为0，无法计算占比")
+        
+        return result
 
     def train_rules_lora(
         self,
@@ -1971,9 +2184,18 @@ class Exp_main(Exp_Basic):
         # 0) 新版（任务1）：两类顶层结构兼容：
         #   A) 评分示例结构：{"time":..., "时空信息01":{...}, "时空信息02":{...}, ..., "判定":..., "reason":[], "suggest":...}
         #   B) 我们早期结构：{"时空信息": [...], "判定": "合规|冲突", "依据": [...], "建议": "..."}
-        if isinstance(obj, dict) and ("判定" in obj or "时空信息" in obj or any(isinstance(k, str) and k.startswith("时空信息") for k in obj.keys())):
+        #   C) 兼容错误格式：{"event": {...}, "result": "合规"} - 优先使用"判定"，兼容"result"
+        if isinstance(obj, dict) and ("判定" in obj or "result" in obj or "时空信息" in obj or any(isinstance(k, str) and k.startswith("时空信息") for k in obj.keys())):
             try:
+                # 优先使用"判定"字段
                 comp_cn = str(obj.get("判定", "")).strip()
+                # 如果"判定"字段不存在或为空，尝试使用"result"字段（兼容错误格式）
+                if not comp_cn or comp_cn not in ("合规", "冲突"):
+                    comp_result = str(obj.get("result", "")).strip()
+                    if comp_result in ("合规", "冲突"):
+                        comp_cn = comp_result
+                        _logging.warning(f"[PARSE] 检测到使用了'result'字段而不是'判定'字段，已兼容处理: {comp_cn}")
+                
                 if comp_cn in ("合规", "冲突"):
                     res["parsed"] = True
                     res["compliance"] = comp_cn
@@ -2135,6 +2357,7 @@ class Exp_main(Exp_Basic):
         max_tokens: int = 256,
         temperature: float = 0.0,
         timeout_sec: Optional[float] = None,
+        conflict_judge_mode: bool = False,
     ) -> List[str]:
         """使用已缓存的模型句柄执行生成（支持单样本和批量，单样本时优化性能）。"""
         if not isinstance(prompts, list):
@@ -2230,8 +2453,8 @@ class Exp_main(Exp_Basic):
         # 单样本处理（优化：不需要 padding）
         if len(prompts) == 1:
             text = str(prompts[0]) if isinstance(prompts[0], str) else str(prompts[0])
-            # 限制输入长度（减少tokenization和生成时间）
-            max_input_length = 2048  # 减少输入长度限制，提升速度
+            # 限制输入长度：冲突判定模式使用4096，其他模式使用2048
+            max_input_length = 4096 if conflict_judge_mode else 2048
             inputs = tok(text, return_tensors="pt", truncation=True, max_length=max_input_length)
             input_token_count = inputs["input_ids"].shape[1]
             inputs = {k: v.to(device_obj) for k, v in inputs.items()}
@@ -2254,17 +2477,36 @@ class Exp_main(Exp_Basic):
                 except Exception:
                     gen_kwargs["max_time"] = timeout
 
-            with torch.no_grad():
-                try:
+            # 使用线程级超时保护，确保真正的超时中断
+            def _generate_inner():
+                with torch.no_grad():
                     if stopping_criteria is not None:
-                        generated = model.generate(
+                        return model.generate(
                             **inputs, **gen_kwargs, stopping_criteria=stopping_criteria
                         )
                     else:
-                        generated = model.generate(**inputs, **gen_kwargs)
-                except Exception as err:  # noqa: BLE001
-                    _logging.error(f"[GEN] {model_key} 生成失败: {err}")
-                    raise
+                        return model.generate(**inputs, **gen_kwargs)
+            
+            if timeout > 0:
+                try:
+                    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(_generate_inner)
+                        try:
+                            generated = future.result(timeout=timeout)
+                        except FuturesTimeoutError:
+                            _logging.error(f"[GEN] {model_key} 生成超时（{timeout:.1f}s），强制中断")
+                            # 尝试取消任务（可能无法完全中断GPU操作，但至少可以释放线程）
+                            future.cancel()
+                            raise RuntimeError(f"模型 {model_key} 生成超时（{timeout:.1f}s）")
+                except Exception as e:
+                    if isinstance(e, RuntimeError) and "超时" in str(e):
+                        raise
+                    # 如果ThreadPoolExecutor不可用，回退到原始方式
+                    _logging.warning(f"[GEN] 线程级超时不可用，回退到StoppingCriteria: {e}")
+                    generated = _generate_inner()
+            else:
+                generated = _generate_inner()
 
             duration = _time.monotonic() - start_ts
             gen_token_count = generated[0].shape[0] - input_token_count
@@ -2310,17 +2552,35 @@ class Exp_main(Exp_Basic):
             except Exception:
                 gen_kwargs["max_time"] = timeout
 
-        with torch.no_grad():
-            try:
+        # 使用线程级超时保护，确保真正的超时中断（批量处理）
+        def _generate_batch_inner():
+            with torch.no_grad():
                 if stopping_criteria is not None:
-                    generated = model.generate(
+                    return model.generate(
                         **inputs, **gen_kwargs, stopping_criteria=stopping_criteria
                     )
                 else:
-                    generated = model.generate(**inputs, **gen_kwargs)
-            except Exception as err:  # noqa: BLE001
-                _logging.error(f"[GEN] {model_key} 批量生成失败: {err}")
-                raise
+                    return model.generate(**inputs, **gen_kwargs)
+        
+        if timeout > 0:
+            try:
+                from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_generate_batch_inner)
+                    try:
+                        generated = future.result(timeout=timeout)
+                    except FuturesTimeoutError:
+                        _logging.error(f"[GEN] {model_key} 批量生成超时（{timeout:.1f}s），强制中断")
+                        future.cancel()
+                        raise RuntimeError(f"模型 {model_key} 批量生成超时（{timeout:.1f}s）")
+            except Exception as e:
+                if isinstance(e, RuntimeError) and "超时" in str(e):
+                    raise
+                # 如果ThreadPoolExecutor不可用，回退到原始方式
+                _logging.warning(f"[GEN] 线程级超时不可用，回退到StoppingCriteria: {e}")
+                generated = _generate_batch_inner()
+        else:
+            generated = _generate_batch_inner()
 
         duration = _time.monotonic() - start_ts
         if timeout > 0 and duration > timeout + 1:
@@ -2593,14 +2853,18 @@ class Exp_main(Exp_Basic):
                 pass
 
     def _extract_focus_entities(self, event_text: str) -> Optional[List[str]]:
-        """从事件文本中提取焦点实体（用于 KG 查询）。"""
+        """从事件文本中提取焦点实体（用于 KG 查询）。
+        
+        优化：只提取飞机实体，减少KG上下文长度，聚焦冲突判定的核心。
+        """
         auto_focus: List[str] = []
         try:
             trips = _extract_triples(event_text)
             for s, p, o in trips:
                 for t in (s, o):
                     t = str(t).strip()
-                    if t:
+                    # 只提取飞机实体，忽略停机位、跑道、设备等
+                    if t and t.startswith("飞机"):
                         auto_focus.append(t)
         except Exception:
             pass
@@ -2612,8 +2876,124 @@ class Exp_main(Exp_Basic):
                 if x and x not in seen:
                     cur_focus.append(x)
                     seen.add(x)
-            return cur_focus
+            return cur_focus if cur_focus else None
         return None
+
+    def _extract_resource_entities(self, event_text: str) -> List[str]:
+        """从事件文本中提取资源实体（停机位、跑道等），用于查询损坏状态。
+        
+        参数:
+            event_text: 事件文本
+            
+        返回:
+            资源实体列表（停机位、跑道等）
+        """
+        resource_entities = []
+        try:
+            # 提取停机位：匹配"编号 X-Y 等 N 个停机位"或"X号停机位"
+            import re as _re
+            # 匹配"编号 10-15 等 6 个停机位"
+            stand_range_pattern = _re.compile(r'编号\s+(\d+)-(\d+)\s+等\s+\d+\s+个停机位')
+            for match in stand_range_pattern.finditer(event_text):
+                start = int(match.group(1))
+                end = int(match.group(2))
+                for i in range(start, end + 1):
+                    resource_entities.append(f"停机位{i}")
+            
+            # 匹配"X号停机位"或"停机位X"
+            stand_single_pattern = _re.compile(r'(\d+)号停机位|停机位(\d+)')
+            for match in stand_single_pattern.finditer(event_text):
+                stand_num = match.group(1) or match.group(2)
+                resource_entities.append(f"停机位{stand_num}")
+            
+            # 提取跑道：匹配"编号 X-Y 等 N 个跑道"或"X号跑道"
+            runway_range_pattern = _re.compile(r'编号\s+(\d+)-(\d+)\s+等\s+\d+\s+个跑道')
+            for match in runway_range_pattern.finditer(event_text):
+                start = int(match.group(1))
+                end = int(match.group(2))
+                for i in range(start, end + 1):
+                    resource_entities.append(f"跑道{i}")
+            
+            # 匹配"X号跑道"或"跑道X"
+            runway_single_pattern = _re.compile(r'(\d+)号跑道|跑道(\d+)')
+            for match in runway_single_pattern.finditer(event_text):
+                runway_num = match.group(1) or match.group(2)
+                resource_entities.append(f"跑道{runway_num}")
+            
+            # 去重
+            if resource_entities:
+                seen = set()
+                unique_resources = []
+                for r in resource_entities:
+                    if r and r not in seen:
+                        unique_resources.append(r)
+                        seen.add(r)
+                return unique_resources
+        except Exception:
+            pass
+        return []
+
+    def _remove_repeat_output(self, output: str) -> str:
+        """移除重复的输出内容。
+        
+        参数:
+            output: 原始输出文本
+            
+        返回:
+            去重后的输出文本
+        """
+        if not output or len(output) < 100:  # 太短的输出不需要去重
+            return output
+        
+        try:
+            # 尝试检测重复的JSON对象
+            import json as _json
+            import re as _re
+            
+            # 查找JSON对象（可能重复多次）
+            json_pattern = _re.compile(r'\{\s*"[^"]+"\s*:\s*"[^"]*"\s*(?:,\s*"[^"]+"\s*:\s*"[^"]*"\s*)*\}')
+            json_matches = json_pattern.findall(output)
+            
+            if len(json_matches) > 1:
+                # 检查是否所有JSON对象都相同
+                unique_jsons = set()
+                for json_str in json_matches:
+                    try:
+                        # 规范化JSON（移除空格）
+                        normalized = _json.dumps(_json.loads(json_str), ensure_ascii=False, separators=(',', ':'))
+                        unique_jsons.add(normalized)
+                    except Exception:
+                        pass
+                
+                # 如果只有一个唯一的JSON，说明是重复的
+                if len(unique_jsons) == 1 and len(json_matches) > 1:
+                    # 只保留第一个JSON和之前的文本
+                    first_json_pos = output.find(json_matches[0])
+                    # 找到第一个JSON后的第一个换行符或输入标记
+                    next_marker = output.find("【", first_json_pos + len(json_matches[0]))
+                    if next_marker > 0:
+                        # 截断到第一个JSON之后
+                        output = output[:first_json_pos + len(json_matches[0])].rstrip()
+                        _logging.warning("[JUDGE] 检测到重复输出，已截断")
+                    else:
+                        # 如果找不到标记，只保留第一个JSON
+                        output = output[:first_json_pos + len(json_matches[0])].rstrip()
+                        _logging.warning("[JUDGE] 检测到重复输出，已截断到第一个JSON")
+            
+            # 检测重复的输入内容（模型重复输出了输入的事件文本）
+            if "【待分析事件" in output:
+                # 查找第一个"【待分析事件"标记
+                first_event_marker = output.find("【待分析事件")
+                if first_event_marker > 0:
+                    # 如果在这个标记之前已经有JSON，截断到第一个标记之前
+                    json_before = _re.search(r'\}\s*$', output[:first_event_marker])
+                    if json_before:
+                        output = output[:json_before.end()].rstrip()
+                        _logging.warning("[JUDGE] 检测到模型重复输入内容，已截断")
+        except Exception as e:
+            _logging.debug(f"[JUDGE] 去重处理失败: {e}")
+        
+        return output
 
     def _get_kg_context(self, focus_entities: Optional[List[str]] = None, limit: int = 200) -> str:
         """获取 KG 上下文文本。
@@ -2752,7 +3132,9 @@ class Exp_main(Exp_Basic):
         
         # 单样本推理
         # 优化：根据模式调整max_tokens，仅抽取时空信息时使用更小的值
-        max_gen_tokens = 256 if not conflict_judge else 1024  # 进一步减少token数
+        # 优化生成参数：减少max_tokens以避免重复生成
+        # 冲突判定模式使用1024，其他模式使用512
+        max_gen_tokens = 1024 if conflict_judge else 512
         
         gen_start = __t.monotonic()
         out: Optional[str] = None
@@ -2763,8 +3145,13 @@ class Exp_main(Exp_Basic):
                 max_tokens=max_gen_tokens,
                 temperature=0.0,
                 timeout_sec=self.generate_timeout_sec,
+                conflict_judge_mode=conflict_judge,
             )
             out = (outs[0] if outs else "") or ""
+            
+            # 检测并截断重复输出（仅在冲突判定模式）
+            if out and conflict_judge:
+                out = self._remove_repeat_output(out)
         except (RuntimeError, OSError, MemoryError) as err:
             try:
                 _logging.warning(f"[JUDGE] 主模型推理失败：{err}")
@@ -2787,6 +3174,7 @@ class Exp_main(Exp_Basic):
                         max_tokens=retry_tokens,
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
+                        conflict_judge_mode=conflict_judge,
                     )
                     out = (outs[0] if outs else "") or ""
                     retry_duration = __t.monotonic() - retry_start
@@ -2875,6 +3263,7 @@ class Exp_main(Exp_Basic):
                         max_tokens=int(self.retry_max_new_tokens),
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
+                        conflict_judge_mode=conflict_judge,
                     )
                     out = (outs[0] if outs else "") or ""
                 else:
@@ -2893,6 +3282,7 @@ class Exp_main(Exp_Basic):
                         max_tokens=int(self.retry_max_new_tokens),
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
+                        conflict_judge_mode=conflict_judge,
                     )
                     out = (outs[0] if outs else "") or ""
             except Exception:
@@ -2912,6 +3302,7 @@ class Exp_main(Exp_Basic):
                         max_tokens=int(self.retry_max_new_tokens),
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
+                        conflict_judge_mode=conflict_judge,
                     )
                     if outs and outs[0]:
                         out = outs[0]
@@ -2932,6 +3323,7 @@ class Exp_main(Exp_Basic):
                         max_tokens=int(self.retry_max_new_tokens),
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
+                        conflict_judge_mode=conflict_judge,
                     )
                     if outs and outs[0]:
                         out = outs[0]
@@ -2977,11 +3369,27 @@ class Exp_main(Exp_Basic):
 
         decomp_handle = self._model_handles.get("decomp") if hasattr(self, "_model_handles") else None
         decomp_available = bool(decomp_handle and decomp_handle.get("model"))
+        
+        # 记录小模型加载状态（用于调试）
+        _logging.info(f"[DECOMP] decomp_available={decomp_available}, enable_decomposer={getattr(self.args, 'enable_decomposer', False)}")
+        if decomp_handle:
+            decomp_model_loaded = decomp_handle.get("model") is not None
+            decomp_tokenizer_loaded = decomp_handle.get("tokenizer") is not None
+            decomp_model_dir = decomp_handle.get("model_dir", "unknown")
+            _logging.info(f"[DECOMP] decomp_handle状态: model={decomp_model_loaded}, tokenizer={decomp_tokenizer_loaded}, model_dir={decomp_model_dir}")
+        else:
+            _logging.warning("[DECOMP] decomp_handle 为 None，小模型未加载")
 
         # conflict_judge模式（提前获取，避免重复getattr）
         conflict_judge_mode = bool(getattr(self.args, "conflict_judge", 1))
         # 小LLM分解器配置
         use_decomposer = bool(getattr(self.args, "enable_decomposer", False))
+        
+        # 在冲突判定模式下强制禁用小模型，避免小模型的混乱输出影响大模型
+        if conflict_judge_mode:
+            if use_decomposer:
+                _logging.info("[DECOMP] 冲突判定模式下禁用小模型，避免混乱输出影响大模型")
+            use_decomposer = False
         
         # 规则提示一次构建，复用
         # 根据 conflict_judge_mode 传入正确的 mode 参数
@@ -2999,23 +3407,128 @@ class Exp_main(Exp_Basic):
                 ev = ev.strip()
                 
                 # 针对每条事件，使用"当前"KG状态生成 prompt（先判后更）
-                # 优化：减少KG上下文查询量（抽取模式使用更少的KG信息）
-                cur_focus = self._extract_focus_entities(ev)
-                kg_limit = 30 if not conflict_judge_mode else 100  # 抽取模式大幅减少KG信息，冲突判定模式限制为100
-                kg_text = self._get_kg_context(cur_focus, limit=kg_limit) if self.kg_service else ""
+                # 优化：减少KG上下文查询量，只查询飞机相关的上下文
+                # 优化：先调用小模型分解，从分解结果中提取飞机实体，然后查询KG
                 
-                # 可选：先调用小LLM做问题分解
+                # 可选：先调用小LLM做问题分解（在获取KG上下文之前，以便从分解结果中提取飞机实体）
+                decomp_text = None
+                aircraft_entities_from_decomp = None
                 if use_decomposer and decomp_available:
+                    _logging.info("[DECOMP] 准备调用小模型进行问题分解...")
                     try:
-                        d_prompt = self._format_decompose_prompt(ev, rules_text, kg_text)
+                        # 小模型模式：进一步限制rules_text长度到1500字符
+                        # 复用已构建的rules_text，但进一步截断到1500字符
+                        decomp_rules_text = rules_text
+                        original_decomp_rules_length = len(decomp_rules_text)
+                        if len(decomp_rules_text) > 1500:
+                            # 截断到1500字符（保留前缀，因为前缀包含重要说明）
+                            # 前缀通常是"你是一名冲突判定专家...\n\n【规则文档】\n"，约50-60字符
+                            # 所以实际规则内容限制在1440字符左右
+                            prefix_end = decomp_rules_text.find("【规则文档】\n")
+                            if prefix_end > 0:
+                                prefix = decomp_rules_text[:prefix_end + len("【规则文档】\n")]
+                                rules_content = decomp_rules_text[prefix_end + len("【规则文档】\n"):]
+                                if len(rules_content) > 1440:
+                                    rules_content = rules_content[:1440] + "\n\n[规则文档已截断，仅保留前1440字符]"
+                                decomp_rules_text = prefix + rules_content
+                            else:
+                                # 如果没有找到前缀标记，直接截断
+                                decomp_rules_text = decomp_rules_text[:1500] + "\n\n[规则文档已截断，仅保留前1500字符]"
+                            _logging.debug(f"[DECOMP] 小模型规则文档已截断：{original_decomp_rules_length} -> {len(decomp_rules_text)} 字符")
+                        
+                        # 小模型的prompt中已经说明不包含KG文本，所以这里传入空字符串
+                        d_prompt = self._format_decompose_prompt(ev, decomp_rules_text, "")
+                        prompt_length = len(d_prompt)
+                        prompt_preview = d_prompt[:300] if prompt_length > 300 else d_prompt
+                        _logging.info(f"[DECOMP] 小模型prompt长度: {prompt_length} 字符")
+                        _logging.debug(f"[DECOMP] 小模型prompt预览（前300字符）: {prompt_preview}")
+                        
+                        # 优化：减少max_tokens，避免小模型生成过长导致超时
+                        decomp_max_tokens = 128  # 实体列表通常很短，减少到128避免生成无用信息
+                        _logging.info(f"[DECOMP] 开始调用小模型生成... (max_tokens={decomp_max_tokens}, timeout={self.generate_timeout_sec}s)")
+                        gen_start_time = _time.monotonic()
                         d_outs = self._generate_with_handle(
                             "decomp",
                             [d_prompt],
-                            max_tokens=1024,
+                            max_tokens=decomp_max_tokens,
                             temperature=0.0,
                             timeout_sec=self.generate_timeout_sec,
                         )
+                        gen_duration = _time.monotonic() - gen_start_time
+                        _logging.info(f"[DECOMP] 小模型生成完成，耗时: {gen_duration:.2f}s")
                         decomp_text = (d_outs[0] if d_outs else "") or ""
+                        _logging.info(f"[DECOMP] 小模型生成完成，输出长度: {len(decomp_text)} 字符")
+                        if decomp_text:
+                            _logging.info(f"[DECOMP] 小模型原始输出（完整）: {decomp_text}")
+                            _logging.debug(f"[DECOMP] 小模型输出预览（前200字符）: {decomp_text[:200]}")
+                        else:
+                            _logging.warning("[DECOMP] 小模型输出为空")
+                        
+                        # 从分解结果中提取飞机实体（增强后处理，从混乱输出中提取JSON）
+                        aircraft_entities_from_decomp = []
+                        if decomp_text and decomp_text.strip():
+                            try:
+                                import json as __json
+                                import re as __re
+                                decomp_raw = decomp_text.strip()
+                                
+                                # 方法1：尝试提取JSON_START和JSON_END之间的内容
+                                if "JSON_START" in decomp_raw and "JSON_END" in decomp_raw:
+                                    start_idx = decomp_raw.find("JSON_START") + len("JSON_START")
+                                    end_idx = decomp_raw.find("JSON_END")
+                                    json_str = decomp_raw[start_idx:end_idx].strip()
+                                    try:
+                                        decomp_obj = __json.loads(json_str)
+                                        entities = decomp_obj.get("entities", [])
+                                        if isinstance(entities, list):
+                                            aircraft_entities_from_decomp = [e for e in entities if isinstance(e, str) and e.startswith("飞机")]
+                                            _logging.info(f"[DECOMP] 从JSON_START/JSON_END中提取到 {len(aircraft_entities_from_decomp)} 个飞机实体: {aircraft_entities_from_decomp}")
+                                    except Exception:
+                                        pass
+                                
+                                # 方法2：如果方法1失败，尝试从输出中提取JSON对象
+                                if not aircraft_entities_from_decomp:
+                                    # 尝试找到第一个完整的JSON对象（以{开始，以}结束）
+                                    json_match = __re.search(r'\{[^{}]*"entities"[^{}]*\}', decomp_raw)
+                                    if json_match:
+                                        try:
+                                            json_str = json_match.group(0)
+                                            decomp_obj = __json.loads(json_str)
+                                            entities = decomp_obj.get("entities", [])
+                                            if isinstance(entities, list):
+                                                aircraft_entities_from_decomp = [e for e in entities if isinstance(e, str) and e.startswith("飞机")]
+                                                _logging.info(f"[DECOMP] 从正则匹配中提取到 {len(aircraft_entities_from_decomp)} 个飞机实体: {aircraft_entities_from_decomp}")
+                                        except Exception:
+                                            pass
+                                
+                                # 方法3：如果方法2失败，尝试直接解析整个输出
+                                if not aircraft_entities_from_decomp:
+                                    try:
+                                        decomp_obj = __json.loads(decomp_raw)
+                                        entities = decomp_obj.get("entities", [])
+                                        if isinstance(entities, list):
+                                            aircraft_entities_from_decomp = [e for e in entities if isinstance(e, str) and e.startswith("飞机")]
+                                            _logging.info(f"[DECOMP] 从直接解析中提取到 {len(aircraft_entities_from_decomp)} 个飞机实体: {aircraft_entities_from_decomp}")
+                                    except Exception:
+                                        pass
+                                
+                                # 方法4：如果所有方法都失败，尝试从文本中直接提取飞机实体（作为最后的fallback）
+                                if not aircraft_entities_from_decomp:
+                                    aircraft_pattern = __re.compile(r'飞机[A-Z]\d+')
+                                    found_aircraft = aircraft_pattern.findall(decomp_raw)
+                                    if found_aircraft:
+                                        aircraft_entities_from_decomp = list(set(found_aircraft))  # 去重
+                                        _logging.info(f"[DECOMP] 从文本直接提取到 {len(aircraft_entities_from_decomp)} 个飞机实体: {aircraft_entities_from_decomp}")
+                                        _logging.warning("[DECOMP] 注意：使用了fallback方法直接从文本提取飞机实体，输出可能不符合JSON格式")
+                                
+                                # 如果仍然没有找到，记录警告
+                                if not aircraft_entities_from_decomp:
+                                    _logging.warning(f"[DECOMP] 无法从输出中提取飞机实体，原始输出（前500字符）: {decomp_text[:500]}")
+                                    
+                            except Exception as e:
+                                _logging.warning(f"[DECOMP] 解析分解结果失败: {type(e).__name__}: {e}")
+                                _logging.debug(f"[DECOMP] 解析失败的原始输出: {decomp_text[:500] if decomp_text else 'None'}")
+                        
                         # 保存小模型输出到 JSONL
                         try:
                             import json as __json
@@ -3031,10 +3544,49 @@ class Exp_main(Exp_Basic):
                             except Exception:
                                 payload["output_raw"] = decomp_text
                             self._append_jsonl(self._decomp_out_file, payload)
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                            _logging.debug(f"[DECOMP] 小模型输出已保存到 JSONL 文件")
+                        except Exception as e:
+                            _logging.warning(f"[DECOMP] 保存小模型输出到JSONL失败: {type(e).__name__}: {e}")
+                    except Exception as e:
+                        _logging.error(f"[DECOMP] 小模型调用失败: {type(e).__name__}: {e}", exc_info=True)
+                        _logging.error(f"[DECOMP] 异常详情 - 类型: {type(e).__name__}, 消息: {str(e)}")
+                        decomp_text = None
+                elif use_decomposer and not decomp_available:
+                    _logging.warning("[DECOMP] enable_decomposer=True 但 decomp_available=False，跳过小模型调用")
+                elif not use_decomposer:
+                    _logging.debug("[DECOMP] enable_decomposer=False，跳过小模型调用")
+                
+                # 如果从分解结果中提取到了飞机实体，优先使用这些实体来查询KG（更精确）
+                # 否则使用从事件文本中提取的实体
+                cur_focus = aircraft_entities_from_decomp if aircraft_entities_from_decomp else self._extract_focus_entities(ev)
+                
+                # 从事件文本中提取停机位、跑道等资源实体（用于查询损坏状态）
+                resource_entities = self._extract_resource_entities(ev)
+                if resource_entities:
+                    _logging.debug(f"[DECOMP] 从事件文本提取到资源实体: {resource_entities}")
+                    # 合并飞机实体和资源实体进行KG查询
+                    if cur_focus:
+                        all_focus = list(set(list(cur_focus) + resource_entities))
+                    else:
+                        all_focus = resource_entities
+                    cur_focus = all_focus if all_focus else None
+                
+                if aircraft_entities_from_decomp:
+                    _logging.info(f"[DECOMP] 使用分解结果中的飞机实体查询KG: {aircraft_entities_from_decomp}")
+                elif cur_focus:
+                    _logging.debug(f"[DECOMP] 使用从事件文本提取的实体查询KG: {cur_focus}")
+                else:
+                    _logging.warning("[DECOMP] 未找到实体，KG查询将使用空实体列表")
+                
+                # 优化：根据事件类型和实体数量动态调整KG查询限制
+                # 对于停机位故障事件，如果提取到了资源实体，优先查询这些实体的属性
+                if resource_entities:
+                    # 有资源实体（停机位故障），减少查询限制，优先查询属性
+                    kg_limit = 30 if not conflict_judge_mode else 50  # 进一步减少到50，只查询关键信息
+                else:
+                    # 没有资源实体，使用原来的限制
+                    kg_limit = 30 if not conflict_judge_mode else 100
+                kg_text = self._get_kg_context(cur_focus, limit=kg_limit) if self.kg_service else ""
                 
                 if show_decomposition:
                     try:
@@ -3042,13 +3594,14 @@ class Exp_main(Exp_Basic):
                     except Exception:
                         pass
 
-                # 主提示：构建冲突判定提示
+                # 主提示：构建冲突判定提示（整合小模型输出）
                 prompt = self._format_conflict_prompt_with_mode(
                     ev,
                     rules_text,
                     kg_text,
                     simple=simple_output,
                     conflict_judge=conflict_judge_mode,
+                    decomp_text=decomp_text,
                 )
                 
                 # 单样本处理：推理、解析、保存、更新KG
@@ -3069,18 +3622,19 @@ class Exp_main(Exp_Basic):
                 continue
             ev = ev.strip()
             # 针对每条事件，使用"当前"KG状态生成 prompt（先判后更）
-            cur_focus = self._extract_focus_entities(ev)
-            kg_text = self._get_kg_context(cur_focus)
-            # 可选：先调用小LLM做问题分解（仅在冲突判定模式）
+            # 优化：先调用小模型分解，从分解结果中提取飞机实体，然后查询KG
+            
+            # 可选：先调用小LLM做问题分解（在获取KG上下文之前，以便从分解结果中提取飞机实体）
             decomp_text = None
+            aircraft_entities_from_decomp = None
             if conflict_judge_mode and use_decomposer and decomp_available:
-                # TODO: before training, using base model as default
                 try:
-                    d_prompt = self._format_decompose_prompt(ev, rules_text, kg_text)
+                    # 小模型的prompt中已经说明不包含KG文本，所以这里传入空字符串
+                    d_prompt = self._format_decompose_prompt(ev, rules_text, "")
                     d_outs = self._generate_with_handle(
                         "decomp",
                         [d_prompt],
-                        max_tokens=1024,
+                        max_tokens=128,  # 实体列表通常很短，减少到128避免生成无用信息
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
                     )
@@ -3111,20 +3665,21 @@ class Exp_main(Exp_Basic):
                 except Exception:
                     pass
 
-            # 主提示：根据 conflict_judge 模式构建提示
+            # 主提示：根据 conflict_judge 模式构建提示（整合小模型输出）
             prompt = self._format_conflict_prompt_with_mode(
                 ev,
                 rules_text,
                 kg_text,
                 simple=simple_output,
                 conflict_judge=conflict_judge_mode,
+                decomp_text=decomp_text,
             )
             batch_events.append(ev)
             batch_prompts.append(prompt)
 
             if len(batch_events) >= max(1, int(batch_size)):
                 # 优化：根据模式调整max_tokens
-                batch_max_tokens = 512 if not conflict_judge_mode else 1024
+                batch_max_tokens = 512 if not conflict_judge_mode else 1024  # 冲突判定模式使用1024
                 outs: Optional[List[str]] = None
                 try:
                     outs = self._generate_with_handle(
@@ -3133,6 +3688,7 @@ class Exp_main(Exp_Basic):
                         max_tokens=batch_max_tokens,
                         temperature=0.0,
                         timeout_sec=self.generate_timeout_sec,
+                        conflict_judge_mode=conflict_judge_mode,
                     )
                 except (RuntimeError, OSError, MemoryError) as err:
                     try:
@@ -3154,6 +3710,7 @@ class Exp_main(Exp_Basic):
                                 max_tokens=retry_tokens,
                                 temperature=0.0,
                                 timeout_sec=self.generate_timeout_sec,
+                                conflict_judge_mode=conflict_judge_mode,
                             )
                         except Exception:
                             outs = [""] * len(batch_prompts)
@@ -3176,6 +3733,7 @@ class Exp_main(Exp_Basic):
                                 max_tokens=int(self.retry_max_new_tokens),
                                 temperature=0.0,
                                 timeout_sec=self.generate_timeout_sec,
+                                conflict_judge_mode=conflict_judge_mode,
                             )
                         else:
                             # simple 降级（仅限冲突判定模式）
@@ -3199,6 +3757,7 @@ class Exp_main(Exp_Basic):
                                 max_tokens=int(self.retry_max_new_tokens),
                                 temperature=0.0,
                                 timeout_sec=self.generate_timeout_sec,
+                                conflict_judge_mode=conflict_judge_mode,
                             )
                     except Exception:
                         outs = [""] * len(batch_prompts)
@@ -3223,6 +3782,7 @@ class Exp_main(Exp_Basic):
                                         max_tokens=int(self.retry_max_new_tokens),
                                         temperature=0.0,
                                         timeout_sec=self.generate_timeout_sec,
+                                        conflict_judge_mode=conflict_judge_mode,
                                     )
                                 except Exception:
                                     re_outs = [""] * len(retry_prompts)
@@ -3251,6 +3811,7 @@ class Exp_main(Exp_Basic):
                                         max_tokens=int(self.retry_max_new_tokens),
                                         temperature=0.0,
                                         timeout_sec=self.generate_timeout_sec,
+                                        conflict_judge_mode=conflict_judge_mode,
                                     )
                                 except Exception:
                                     re_outs = [""] * len(retry_prompts)
@@ -3384,7 +3945,7 @@ class Exp_main(Exp_Basic):
         # 处理尾批
         if batch_events:
             # 优化：根据模式调整max_tokens
-            tail_max_tokens = 512 if not conflict_judge_mode else 1024
+            tail_max_tokens = 512 if not conflict_judge_mode else 1024  # 冲突判定模式使用1024
             outs: Optional[List[str]] = None
             try:
                 outs = self._generate_with_handle(
@@ -3393,6 +3954,7 @@ class Exp_main(Exp_Basic):
                     max_tokens=tail_max_tokens,
                     temperature=0.0,
                     timeout_sec=self.generate_timeout_sec,
+                    conflict_judge_mode=conflict_judge_mode,
                 )
             except (RuntimeError, OSError, MemoryError) as err:
                 try:
@@ -3414,6 +3976,7 @@ class Exp_main(Exp_Basic):
                             max_tokens=retry_tokens,
                             temperature=0.0,
                             timeout_sec=self.generate_timeout_sec,
+                            conflict_judge_mode=conflict_judge_mode,
                         )
                     except Exception:
                         outs = [""] * len(batch_prompts)
@@ -3435,6 +3998,7 @@ class Exp_main(Exp_Basic):
                             max_tokens=int(self.retry_max_new_tokens),
                             temperature=0.0,
                             timeout_sec=self.generate_timeout_sec,
+                            conflict_judge_mode=conflict_judge_mode,
                         )
                     else:
                         retry_prompts: List[str] = []
@@ -3457,6 +4021,7 @@ class Exp_main(Exp_Basic):
                             max_tokens=int(self.retry_max_new_tokens),
                             temperature=0.0,
                             timeout_sec=self.generate_timeout_sec,
+                            conflict_judge_mode=conflict_judge_mode,
                         )
                 except Exception:
                     outs = [""] * len(batch_prompts)
@@ -3480,6 +4045,7 @@ class Exp_main(Exp_Basic):
                                     max_tokens=int(self.retry_max_new_tokens),
                                     temperature=0.0,
                                     timeout_sec=self.generate_timeout_sec,
+                                    conflict_judge_mode=conflict_judge_mode,
                                 )
                             except Exception:
                                 re_outs = [""] * len(retry_prompts)
@@ -3506,6 +4072,7 @@ class Exp_main(Exp_Basic):
                                     max_tokens=int(self.retry_max_new_tokens),
                                     temperature=0.0,
                                     timeout_sec=self.generate_timeout_sec,
+                                    conflict_judge_mode=conflict_judge_mode,
                                 )
                             except Exception:
                                 re_outs = [""] * len(retry_prompts)
@@ -3853,11 +4420,18 @@ class Exp_main(Exp_Basic):
                     if _is_empty_value(v):
                         continue  # 跳过空值字段
                     if isinstance(v, dict):
-                        pack[nk] = _build_sentence(v)
+                        sentence = _build_sentence(v)
+                        # 检查构建的句子是否为空，如果为空则跳过该字段
+                        if _is_empty_value(sentence):
+                            continue
+                        pack[nk] = sentence
                     elif isinstance(v, str):
                         pack[nk] = v if v.endswith("；") or v.endswith("。") else v + "；"
                     else:
-                        pack[nk] = ""
+                        # 其他类型如果为空，跳过该字段，不设置空字符串
+                        if _is_empty_value(v):
+                            continue
+                        pack[nk] = str(v) if v is not None else ""
                 results.append(pack)
         try:
             with open(out_path, "w", encoding="utf-8") as wf:

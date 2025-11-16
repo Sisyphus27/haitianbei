@@ -1,11 +1,18 @@
 """
-Author: zy
-Date: 2025-10-22 17:39:16
-LastEditTime: 2025-10-22 17:39:20
-LastEditors: zy
-Description:
-FilePath: haitianbei/data_provider/data_loader.py
+数据加载器：处理事件文件和知识图谱操作
 
+功能：
+1. 事件文件加载：从JSONL格式的事件文件中读取事件列表
+2. 知识图谱构建：连接Neo4j数据库，创建和管理知识图谱
+3. 三元组处理：将提取的三元组转换为KG中的节点和关系
+4. 静态资源初始化：创建停机位、跑道、设备等固定资源
+5. 动态更新：根据事件动态更新飞机状态、资源占用等信息
+
+在stream-judge模式中的作用：
+- 读取事件文件（train_texts.jsonl）中的事件文本
+- 初始化和管理Neo4j知识图谱
+- 处理三元组提取结果，更新图谱结构
+- 管理飞机的生命周期状态和资源分配
 """
 
 import os
@@ -163,7 +170,6 @@ class Dataset_KG(Dataset):
     # ----------------------------
     # 知识图谱：构建与更新
     # ----------------------------
-    # FIXME: 初始化图有问题
     def _init_schema(self, create_constraints: bool = True):
         """定义类标签与关系/属性映射（Neo4j 推荐使用英文大写关系类型）。"""
         # 节点标签
@@ -438,9 +444,19 @@ class Dataset_KG(Dataset):
         if label is None:
             label = self._class_for_entity(name) or "Entity"
         with self.driver.session(database=self.neo4j_database) as sess:
+            # 检查节点是否已存在
+            existing = sess.run(
+                f"MATCH (n:{label} {{name:$name}}) RETURN count(n) AS count",  # type: ignore[arg-type]
+                {"name": name}
+            ).single()
+            is_new = existing is None or existing.get("count", 0) == 0
+            
             sess.run(f"MERGE (n:{label} {{name:$name}})", {"name": name})  # type: ignore[arg-type]
+            
+            # 如果是新创建的飞机节点，记录日志
+            if is_new and label == self.Aircraft:
+                _logger.info(f"[KG] 创建飞机节点: {name} (标签: {label})")
         return name
-    # FIXME: 将资源车上时和任务分离了。
     def _add_object(self, subject_name: str, predicate_str: str, obj_value: str, obj_type_hint: str | None = None):
         """依据谓词写入 Neo4j：关系或属性。"""
         meta = self.PREDICATE_MAP.get(predicate_str)
@@ -1376,6 +1392,279 @@ class Dataset_KG(Dataset):
                     except Exception:
                         pass
 
+        # 9) 故障处理：设备故障、停机位故障、故障恢复
+        # 9.1) 从文本中提取时间（分钟）
+        current_time_min = None
+        time_match = re.search(r"时间[:：]\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2}):(\d{2})", text)
+        if time_match:
+            hour = int(time_match.group(4))
+            minute = int(time_match.group(5))
+            second = int(time_match.group(6))
+            current_time_min = hour * 60.0 + minute + second / 60.0
+        
+        # 9.2) 处理设备故障：从三元组中识别 (停机位X, 设备故障, 设备名称) 和 (设备名称, 故障类型, 故障类型)
+        device_failure_triples = [(s, p, o) for s, p, o in triples if p == "设备故障"]
+        failure_type_triples = [(s, p, o) for s, p, o in triples if p == "故障类型"]
+        
+        for stand_name, _, device_name in device_failure_triples:
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    # 规范化停机位名称
+                    stand_norm = self._canon_entity(stand_name)
+                    # 规范化设备名称（可能需要映射到FR设备）
+                    device_norm = self._canon_entity(device_name)
+                    
+                    # 查找故障类型
+                    failure_type = None
+                    for dev_name, pred, fail_type in failure_type_triples:
+                        if self._canon_entity(dev_name) == device_norm:
+                            failure_type = fail_type
+                            break
+                    
+                    # 更新停机位的isDamaged状态
+                    sess.run(
+                        """
+                        MATCH (s:Stand {name:$stand})
+                        SET s.isDamaged = true,
+                            s.failureTime = $time,
+                            s.failureDescription = $desc
+                        """,
+                        {
+                            "stand": stand_norm,
+                            "time": current_time_min if current_time_min is not None else 0.0,
+                            "desc": f"{device_name}{failure_type if failure_type else '故障'}"
+                        }
+                    )
+                    
+                    # 尝试找到对应的设备节点并更新状态
+                    # 设备名称可能是中文描述，需要尝试匹配到FR设备
+                    # 首先尝试直接匹配设备名称
+                    device_found = False
+                    # 尝试匹配固定设备（通过停机位推断）
+                    if stand_norm.startswith("停机位"):
+                        stand_num_match = re.search(r"停机位(\d+)", stand_norm)
+                        if stand_num_match:
+                            stand_num = int(stand_num_match.group(1))
+                            # 根据停机位和设备类型推断可能的FR设备
+                            # 这里简化处理，只更新停机位状态
+                            # 如果需要，可以进一步查询覆盖该停机位的设备
+                            pass
+                    
+                    # 如果设备名称是FR/MR格式，直接更新
+                    if re.fullmatch(r"FR\d{1,3}|MR\d{2}", device_norm):
+                        sess.run(
+                            """
+                            MATCH (d:Device {name:$dev})
+                            SET d.isDamaged = true,
+                                d.failureTime = $time,
+                                d.failureDescription = $desc
+                            """,
+                            {
+                                "dev": device_norm,
+                                "time": current_time_min if current_time_min is not None else 0.0,
+                                "desc": f"{failure_type if failure_type else '故障'}"
+                            }
+                        )
+                        device_found = True
+            except Exception as e:
+                _logger.warning(f"处理设备故障时出错: {e}")
+                pass
+        
+        # 9.3) 处理停机位故障：从三元组中识别 (停机位X, 停机位故障, 持续时间)
+        stand_failure_triples = [(s, p, o) for s, p, o in triples if p == "停机位故障"]
+        # 检查是否是"下一架降落飞机"的特殊故障事件
+        is_next_aircraft_failure = re.search(r"下一架降落飞机", text) is not None
+        
+        for stand_name, _, duration_str in stand_failure_triples:
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    stand_norm = self._canon_entity(stand_name)
+                    duration_min = float(duration_str) if duration_str.isdigit() else 0.0
+                    
+                    sess.run(
+                        """
+                        MATCH (s:Stand {name:$stand})
+                        SET s.isDamaged = true,
+                            s.failureTime = $time,
+                            s.failureDuration = $duration
+                        """,
+                        {
+                            "stand": stand_norm,
+                            "time": current_time_min if current_time_min is not None else 0.0,
+                            "duration": duration_min
+                        }
+                    )
+                    
+                    # 如果是"下一架降落飞机"的特殊故障，尝试查找正在着陆或即将着陆的飞机
+                    if is_next_aircraft_failure:
+                        # 查询正在着陆的飞机（有USES_RUNWAY关系且跑道是"跑道Z"）
+                        # 或者查询最近开始着陆的飞机（有HAS_TIME关系且时间接近当前时间）
+                        next_aircraft_query = """
+                        MATCH (a:Aircraft)-[:USES_RUNWAY]->(r:Runway {name:"跑道Z"})
+                        WHERE NOT (a)-[:HAS_CURRENT_GATE]->(:Stand)
+                        OPTIONAL MATCH (a)-[:HAS_TIME]->(t:Time)
+                        RETURN a.name AS name, t.name AS time_str
+                        ORDER BY a.name
+                        LIMIT 1
+                        """
+                        result = sess.run(next_aircraft_query).single()
+                        if result and result.get("name"):
+                            next_aircraft_name = str(result.get("name"))
+                            # 将停机位故障与飞机关联（通过分配停机位关系）
+                            try:
+                                sess.run(
+                                    """
+                                    MATCH (a:Aircraft {name:$ac})
+                                    MATCH (s:Stand {name:$stand})
+                                    MERGE (a)-[:TARGET_GATE]->(s)
+                                    """,
+                                    {"ac": next_aircraft_name, "stand": stand_norm}
+                                )
+                                _logger.info(f"[KG] 下一架降落飞机故障：将 {next_aircraft_name} 关联到故障停机位 {stand_norm}")
+                            except Exception as e:
+                                _logger.warning(f"关联下一架降落飞机到故障停机位时出错: {e}")
+            except Exception as e:
+                _logger.warning(f"处理停机位故障时出错: {e}")
+                pass
+        
+        # 9.4) 处理故障恢复：从三元组中识别 (设备名称, 故障恢复, 恢复类型) 和 (飞机X, 作业恢复, 作业类型)
+        recovery_triples = [(s, p, o) for s, p, o in triples if p == "故障恢复"]
+        job_recovery_triples = [(s, p, o) for s, p, o in triples if p == "作业恢复"]
+        
+        # 从作业恢复推断设备和停机位
+        for ac_name, _, job_type in job_recovery_triples:
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    ac_norm = self._canon_entity(ac_name)
+                    
+                    # 从作业类型推断设备类型
+                    device_keywords = {
+                        "供电": ["供电", "供电接口", "供电站"],
+                        "污水处理": ["污水处理", "污水处理装置", "清洗装置"],
+                        "加氮": ["供氮", "供氮终端", "供氮站", "供氮管路"],
+                        "加氧": ["供氧", "供氧阀门", "供氧站"],
+                        "供液压": ["液压", "液压软管", "液压泵", "液压站"],
+                        "加压缩空气": ["供气", "供气压力", "供气站"],
+                    }
+                    
+                    # 查找飞机当前所在的停机位
+                    stand_result = sess.run(
+                        """
+                        MATCH (a:Aircraft {name:$ac})-[:HAS_CURRENT_GATE]->(s:Stand)
+                        RETURN s.name AS stand
+                        """,
+                        {"ac": ac_norm}
+                    ).single()
+                    
+                    if stand_result:
+                        stand_name = stand_result.get("stand")
+                        stand_norm = self._canon_entity(stand_name) if stand_name else None
+                        
+                        # 根据作业类型推断设备并恢复
+                        for job_key, device_list in device_keywords.items():
+                            if job_key in job_type:
+                                # 查找该停机位相关的故障设备
+                                for device_keyword in device_list:
+                                    # 查询该停机位覆盖的设备或名称包含关键词的设备
+                                    device_results = sess.run(
+                                        """
+                                        MATCH (d:Device)
+                                        WHERE d.name CONTAINS $keyword
+                                        OPTIONAL MATCH (d)-[:COVERS_STAND]->(s:Stand {name:$stand})
+                                        WITH d, s
+                                        WHERE s IS NOT NULL OR d.name CONTAINS $keyword
+                                        RETURN d.name AS dev, d.isDamaged AS damaged
+                                        LIMIT 5
+                                        """,
+                                        {"keyword": device_keyword, "stand": stand_norm}
+                                    )
+                                    
+                                    for dev_row in device_results:
+                                        dev_name = dev_row.get("dev")
+                                        is_damaged = dev_row.get("damaged", False)
+                                        if dev_name and is_damaged:
+                                            # 恢复设备
+                                            sess.run(
+                                                """
+                                                MATCH (d:Device {name:$dev})
+                                                SET d.isDamaged = false,
+                                                    d.failureTime = null,
+                                                    d.failureDuration = null,
+                                                    d.failureDescription = null
+                                                """,
+                                                {"dev": dev_name}
+                                            )
+                                    
+                                    # 如果停机位本身有故障，也恢复停机位
+                                    if stand_norm:
+                                        sess.run(
+                                            """
+                                            MATCH (s:Stand {name:$stand})
+                                            WHERE s.isDamaged = true
+                                            SET s.isDamaged = false,
+                                                s.failureTime = null,
+                                                s.failureDuration = null,
+                                                s.failureDescription = null
+                                            """,
+                                            {"stand": stand_norm}
+                                        )
+            except Exception as e:
+                _logger.warning(f"处理故障恢复时出错: {e}")
+                pass
+        
+        # 处理直接的设备恢复三元组
+        for device_name, _, recovery_type in recovery_triples:
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    device_norm = self._canon_entity(device_name)
+                    
+                    # 尝试匹配设备（可能是中文名称，需要查找对应的FR/MR设备）
+                    # 首先尝试直接匹配
+                    device_results = sess.run(
+                        """
+                        MATCH (d:Device)
+                        WHERE d.name = $dev OR d.name CONTAINS $dev
+                        RETURN d.name AS dev, d.isDamaged AS damaged
+                        LIMIT 5
+                        """,
+                        {"dev": device_norm}
+                    )
+                    
+                    for dev_row in device_results:
+                        dev_name = dev_row.get("dev")
+                        is_damaged = dev_row.get("damaged", False)
+                        if dev_name and is_damaged:
+                            sess.run(
+                                """
+                                MATCH (d:Device {name:$dev})
+                                SET d.isDamaged = false,
+                                    d.failureTime = null,
+                                    d.failureDuration = null,
+                                    d.failureDescription = null
+                                """,
+                                {"dev": dev_name}
+                            )
+                    
+                    # 如果设备名称包含停机位信息，也恢复对应的停机位
+                    stand_match = re.search(r"(\d+)号", device_name)
+                    if stand_match:
+                        stand_num = stand_match.group(1)
+                        stand_name = f"停机位{stand_num}"
+                        sess.run(
+                            """
+                            MATCH (s:Stand {name:$stand})
+                            WHERE s.isDamaged = true
+                            SET s.isDamaged = false,
+                                s.failureTime = null,
+                                s.failureDuration = null,
+                                s.failureDescription = null
+                            """,
+                            {"stand": stand_name}
+                        )
+            except Exception as e:
+                _logger.warning(f"处理设备恢复时出错: {e}")
+                pass
+
     # ----------------------------
     # 查询接口
     # ----------------------------
@@ -1817,6 +2106,102 @@ class Dataset_KG(Dataset):
         if keep_fixed:
             self._init_static_graph()
 
+    def check_and_repair_expired_failures(self, current_time_min: float) -> dict:
+        """检查并自动修复过期的损坏。
+        
+        参数:
+            current_time_min: 当前时间（分钟，从00:00:00开始计算）
+            
+        返回:
+            dict: 包含修复统计信息的字典
+                - repaired_stands: 修复的停机位列表
+                - repaired_devices: 修复的设备列表
+                - total_repaired: 总修复数量
+        """
+        repaired_stands = []
+        repaired_devices = []
+        
+        try:
+            with self.driver.session(database=self.neo4j_database) as sess:
+                # 查询所有带有 failureDuration 且 isDamaged=true 的停机位
+                stand_query = """
+                MATCH (s:Stand)
+                WHERE s.isDamaged = true 
+                  AND s.failureDuration IS NOT NULL 
+                  AND s.failureTime IS NOT NULL
+                RETURN s.name AS name, 
+                       s.failureTime AS failure_time,
+                       s.failureDuration AS duration
+                """
+                
+                for record in sess.run(stand_query):
+                    stand_name = record.get("name")
+                    failure_time = record.get("failure_time")
+                    duration = record.get("duration")
+                    
+                    if stand_name and failure_time is not None and duration is not None:
+                        # 检查是否过期：当前时间 >= 故障时间 + 持续时间
+                        if current_time_min >= (failure_time + duration):
+                            # 自动修复
+                            sess.run(
+                                """
+                                MATCH (s:Stand {name:$stand})
+                                SET s.isDamaged = false,
+                                    s.failureTime = null,
+                                    s.failureDuration = null,
+                                    s.failureDescription = null
+                                """,
+                                {"stand": stand_name}
+                            )
+                            repaired_stands.append(stand_name)
+                            _logger.info(f"[AUTO-REPAIR] 停机位 {stand_name} 故障已过期，自动修复（故障时间: {failure_time:.2f}分钟，持续时间: {duration:.2f}分钟，当前时间: {current_time_min:.2f}分钟）")
+                
+                # 查询所有带有 failureDuration 且 isDamaged=true 的设备
+                device_query = """
+                MATCH (d:Device)
+                WHERE d.isDamaged = true 
+                  AND d.failureDuration IS NOT NULL 
+                  AND d.failureTime IS NOT NULL
+                RETURN d.name AS name, 
+                       d.failureTime AS failure_time,
+                       d.failureDuration AS duration
+                """
+                
+                for record in sess.run(device_query):
+                    device_name = record.get("name")
+                    failure_time = record.get("failure_time")
+                    duration = record.get("duration")
+                    
+                    if device_name and failure_time is not None and duration is not None:
+                        # 检查是否过期：当前时间 >= 故障时间 + 持续时间
+                        if current_time_min >= (failure_time + duration):
+                            # 自动修复
+                            sess.run(
+                                """
+                                MATCH (d:Device {name:$dev})
+                                SET d.isDamaged = false,
+                                    d.failureTime = null,
+                                    d.failureDuration = null,
+                                    d.failureDescription = null
+                                """,
+                                {"dev": device_name}
+                            )
+                            repaired_devices.append(device_name)
+                            _logger.info(f"[AUTO-REPAIR] 设备 {device_name} 故障已过期，自动修复（故障时间: {failure_time:.2f}分钟，持续时间: {duration:.2f}分钟，当前时间: {current_time_min:.2f}分钟）")
+        
+        except Exception as e:
+            _logger.warning(f"检查并修复过期损坏时出错: {e}")
+        
+        total_repaired = len(repaired_stands) + len(repaired_devices)
+        if total_repaired > 0:
+            _logger.info(f"[AUTO-REPAIR] 自动修复完成：修复了 {len(repaired_stands)} 个停机位和 {len(repaired_devices)} 个设备，总计 {total_repaired} 个")
+        
+        return {
+            "repaired_stands": repaired_stands,
+            "repaired_devices": repaired_devices,
+            "total_repaired": total_repaired
+        }
+
     def cleanup_isolated_nodes(self):
         """清理不连通的节点（如时间节点），但保留必要的节点类型。
         
@@ -1835,7 +2220,6 @@ class Dataset_KG(Dataset):
         - 时间节点（如"2025-07-01 08:00:00"）
         - 其他不连通的非必要节点
         """
-        import re
         with self.driver.session(database=self.neo4j_database) as sess:
             # 定义需要保留的节点类型（使用标签列表）
             keep_labels = [
@@ -1849,12 +2233,6 @@ class Dataset_KG(Dataset):
                 "FixedDevice",
                 "MobileDevice",
             ]
-            
-            # 一次性删除所有时间节点（通过名称模式匹配）
-            # 删除时间格式节点：YYYY-MM-DD HH:MM:SS
-            time_pattern1 = r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}"
-            # 删除中文时间格式节点：2025年7月1日 08:00:00
-            time_pattern2 = r"\d{4}年\d{1,2}月\d{1,2}日"
             
             # 删除不连通且不是必要类型的节点
             # 使用更高效的 Cypher 查询，一次性删除所有符合条件的节点
@@ -1878,39 +2256,27 @@ class Dataset_KG(Dataset):
             deleted_count = result["deleted_count"] if result else 0
             
             # 删除时间节点（即使它们可能有一些连接，但通常时间节点不应该作为独立节点存在）
-            # 查找所有可能是时间节点的节点
-            all_nodes = sess.run("""
+            # 直接在Cypher中匹配时间节点并批量删除，使用name属性替代id()函数
+            # 使用正则表达式匹配时间格式节点名称
+            # Neo4j 4.x+ 支持使用 =~ 进行正则匹配
+            time_node_query = """
                 MATCH (n)
                 WHERE n.name IS NOT NULL
-                RETURN id(n) AS nodeId, n.name AS name, labels(n) AS labels
-            """).data()
-            
-            time_node_ids = []
-            for node in all_nodes:
-                name = str(node.get("name", ""))
-                labels_list = node.get("labels", [])
-                # 检查是否是时间节点
-                is_time = (
-                    re.match(time_pattern1, name) is not None or
-                    re.search(time_pattern2, name) is not None
-                )
-                # 如果是不必要类型的时间节点，标记为删除
-                if is_time and not any(label in [self.Aircraft, self.Gate, self.Runway, self.Device, self.Resource, self.Job, "JobInstance", "FixedDevice", "MobileDevice"] for label in labels_list):
-                    time_node_ids.append(node["nodeId"])
-            
-            # 批量删除时间节点
-            if time_node_ids:
-                # 使用参数化查询批量删除
-                for node_id in time_node_ids:
-                    try:
-                        sess.run("""
-                            MATCH (n)
-                            WHERE id(n) = $nodeId
-                            DETACH DELETE n
-                        """, {"nodeId": node_id})
-                        deleted_count += 1
-                    except Exception:
-                        pass
+                    AND (
+                        // 匹配 YYYY-MM-DD HH:MM:SS 格式
+                        n.name =~ '^\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}.*'
+                        OR
+                        // 匹配中文时间格式：2025年7月1日 08:00:00
+                        n.name =~ '.*\\d{4}年\\d{1,2}月\\d{1,2}日.*'
+                    )
+                    AND NOT any(label IN labels(n) WHERE label IN $keep_labels)
+                WITH n
+                DETACH DELETE n
+                RETURN count(n) AS time_deleted_count
+            """
+            time_result = sess.run(time_node_query, {"keep_labels": keep_labels}).single()
+            time_deleted = time_result["time_deleted_count"] if time_result else 0
+            deleted_count += time_deleted
             
             _logger.info(f"清理离散节点完成，删除了 {deleted_count} 个节点")
             return deleted_count

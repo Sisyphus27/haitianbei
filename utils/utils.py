@@ -385,7 +385,7 @@ def detect_potential_conflict(event_text: str) -> bool:
 	return bool(_CONFLICT_PATTERN.search(event_text))
 
 
-def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict, dict]:
+def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict, dict, dict]:
 	"""从KG全局状态提取信息，生成符合readme.md快照格式的JSON配置。
 	
 	参数:
@@ -393,9 +393,20 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 		current_time_min: 当前时间（分钟）
 		
 	返回:
-		tuple[dict, dict]: (快照配置字典, 飞机ID映射字典)
-			- 快照配置字典：包含time, planes, stand_occupancy, blocked_stands等字段
+		tuple[dict, dict, dict]: (快照配置字典, 飞机ID映射字典, 完整映射字典)
+			- 快照配置字典：包含time, planes, stand_occupancy, blocked_stands, disturbance_events等字段
 			- 飞机ID映射字典：{数字ID: 原始名称}，例如 {0: "飞机A001", 1: "飞机A002"}
+			- 完整映射字典：包含所有映射关系，结构如下：
+				{
+					"aircraft": {plane_id: name},  # 飞机ID到名称的映射
+					"devices": {normalized: original},  # 规范化设备名称到原始KG名称的映射（用于写回KG）
+					"resources": {normalized: original}  # 规范化资源名称到原始KG名称的映射（用于写回KG）
+				}
+			
+	注意:
+		- 设备名称可能从中文（如"移动加氧车"）映射到MR格式（如"MR02"）
+		- 资源名称通常已经是R格式（如"R005"），但为了统一性仍需记录映射
+		- 映射字典用于后续将强化学习结果写回KG时，能够正确找到原始KG节点名称
 	"""
 	if not kg_service or not hasattr(kg_service, 'kg'):
 		return ({
@@ -406,7 +417,11 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 			"arrival_plan": {},
 			"devices": {"fixed": {}, "mobile": {}},
 			"disturbance_events": []
-		}, {})
+		}, {}, {
+			"aircraft": {},
+			"devices": {},
+			"resources": {}
+		})
 	
 	kg = kg_service.kg
 	if not hasattr(kg, 'driver') or not hasattr(kg, 'neo4j_database'):
@@ -418,7 +433,11 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 			"arrival_plan": {},
 			"devices": {"fixed": {}, "mobile": {}},
 			"disturbance_events": []
-		}, {})
+		}, {}, {
+			"aircraft": {},
+			"devices": {},
+			"resources": {}
+		})
 	
 	snapshot = {
 		"time": float(current_time_min),
@@ -431,6 +450,8 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 	}
 	
 	aircraft_map = {}  # 飞机名称 -> 数字ID映射（在try块外初始化，以便在异常时也能返回）
+	device_name_map = {}  # 规范化设备名称 -> 原始KG名称映射（在try块外初始化，以便在异常时也能返回）
+	resource_name_map = {}  # 规范化资源名称 -> 原始KG名称映射（在try块外初始化，以便在异常时也能返回）
 	
 	try:
 		with kg.driver.session(database=kg.neo4j_database) as sess:
@@ -689,20 +710,232 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 				if arrival_time is not None:
 					snapshot["arrival_plan"][str(ac_id)] = float(arrival_time)
 			
-			# 6. 添加 disturbance_events 字段（从 blocked_stands 推断）
-			# 如果存在 blocked_stands，创建一个扰动事件
-			if snapshot["blocked_stands"]:
-				# 创建一个扰动事件，开始时间为当前时间，结束时间假设为当前时间+60分钟
-				# 实际应用中，应该从KG中提取扰动事件的起止时间
-				disturbance_event = {
-					"id": 0,
-					"start": float(current_time_min),
-					"end": float(current_time_min) + 60.0,  # 默认持续60分钟
-					"stands": snapshot["blocked_stands"].copy()
-				}
-				snapshot["disturbance_events"] = [disturbance_event]
-			else:
-				snapshot["disturbance_events"] = []
+			# 6. 生成 disturbance_events 字段（从KG的isDamaged属性提取）
+			# 查询所有损坏的节点（停机位、设备、资源），提取failureTime和failureDuration
+			disturbance_events = []
+			event_id_counter = 0
+			
+			# 映射字典已在try块外初始化，这里只需确保它们已存在
+			
+			# 6.1 查询损坏的停机位（只查询在当前时间点仍然有效的）
+			damaged_stands_query = """
+			MATCH (s:Stand)
+			WHERE s.isDamaged = true
+			  AND s.failureTime IS NOT NULL
+			  AND (s.failureDuration IS NULL OR s.failureTime + COALESCE(s.failureDuration, 60.0) >= $current_time)
+			RETURN s.name AS name,
+			       s.failureTime AS failure_time,
+			       s.failureDuration AS failure_duration
+			ORDER BY s.name
+			"""
+			
+			damaged_stands_by_time = {}  # {(start, end): [stand_ids]}
+			
+			for record in sess.run(damaged_stands_query, {"current_time": current_time_min}):
+				stand_name = record.get("name", "")
+				if not stand_name:
+					continue
+				
+				# 提取停机位编号（如"停机位14" -> 14）
+				m = re.search(r"停机位(\d+)", stand_name)
+				if not m:
+					continue
+				
+				stand_id = int(m.group(1))
+				failure_time = record.get("failure_time")
+				failure_duration = record.get("failure_duration")
+				
+				# 确定开始和结束时间
+				start_time = float(failure_time) if failure_time is not None else float(current_time_min)
+				duration = float(failure_duration) if failure_duration is not None else 60.0
+				end_time = start_time + duration
+				
+				# 按时间段分组
+				time_key = (start_time, end_time)
+				if time_key not in damaged_stands_by_time:
+					damaged_stands_by_time[time_key] = []
+				damaged_stands_by_time[time_key].append(stand_id)
+			
+			# 为每个时间段的停机位创建事件
+			for (start, end), stand_ids in damaged_stands_by_time.items():
+				disturbance_events.append({
+					"id": event_id_counter,
+					"start": start,
+					"end": end,
+					"stands": sorted(stand_ids)
+				})
+				event_id_counter += 1
+			
+			# 6.2 查询损坏的设备（固定设备，只查询在当前时间点仍然有效的）
+			damaged_fixed_devices_query = """
+			MATCH (d:Device:FixedDevice)
+			WHERE d.isDamaged = true
+			  AND d.failureTime IS NOT NULL
+			  AND (d.failureDuration IS NULL OR d.failureTime + COALESCE(d.failureDuration, 60.0) >= $current_time)
+			RETURN d.name AS name,
+			       d.failureTime AS failure_time,
+			       d.failureDuration AS failure_duration
+			ORDER BY d.name
+			"""
+			
+			damaged_devices_by_time = {}  # {(start, end): [device_names]}
+			
+			for record in sess.run(damaged_fixed_devices_query, {"current_time": current_time_min}):
+				device_name = record.get("name", "")
+				if not device_name:
+					continue
+				
+				# 规范化设备名称（确保是FR格式）
+				device_norm = device_name.strip()
+				original_name = device_name.strip()  # 保存原始名称
+				# 如果设备名称不是FR格式，尝试映射到标准格式
+				if not re.match(r"FR\d{1,3}$", device_norm):
+					# 尝试提取数字：如"FR5" -> "FR05"，但保持原格式（强化学习环境可能接受"FR5"）
+					# 如果包含中文，尝试查找对应的FR设备（简化处理，保持原名称）
+					# KG中的设备名称应该已经是FR格式，这里主要处理可能的格式不一致
+					if re.search(r"FR", device_norm, re.IGNORECASE):
+						# 如果包含FR但不匹配标准格式，尝试规范化（如"FR5"保持原样，"FR05"也保持原样）
+						# 强化学习环境接受"FR5"和"FR05"两种格式
+						pass
+					# 如果完全不是FR格式，保持原名称（可能在KG中使用中文名称）
+				
+				# 记录设备名称映射（规范化名称 -> 原始名称）
+				if device_norm != original_name or device_norm not in device_name_map:
+					device_name_map[device_norm] = original_name
+				
+				failure_time = record.get("failure_time")
+				failure_duration = record.get("failure_duration")
+				
+				# 确定开始和结束时间
+				start_time = float(failure_time) if failure_time is not None else float(current_time_min)
+				duration = float(failure_duration) if failure_duration is not None else 60.0
+				end_time = start_time + duration
+				
+				# 按时间段分组
+				time_key = (start_time, end_time)
+				if time_key not in damaged_devices_by_time:
+					damaged_devices_by_time[time_key] = []
+				damaged_devices_by_time[time_key].append(device_norm)
+			
+			# 6.3 查询损坏的设备（移动设备，只查询在当前时间点仍然有效的）
+			damaged_mobile_devices_query = """
+			MATCH (d:Device:MobileDevice)
+			WHERE d.isDamaged = true
+			  AND d.failureTime IS NOT NULL
+			  AND (d.failureDuration IS NULL OR d.failureTime + COALESCE(d.failureDuration, 60.0) >= $current_time)
+			RETURN d.name AS name,
+			       d.failureTime AS failure_time,
+			       d.failureDuration AS failure_duration
+			ORDER BY d.name
+			"""
+			
+			for record in sess.run(damaged_mobile_devices_query, {"current_time": current_time_min}):
+				device_name = record.get("name", "")
+				if not device_name:
+					continue
+				
+				# 规范化设备名称（确保是MR格式）
+				device_norm = device_name.strip()
+				original_name = device_name.strip()  # 保存原始名称
+				# 如果设备名称不是MR格式，尝试映射
+				if not re.match(r"MR\d{2}$", device_norm):
+					# 尝试使用映射函数将中文名称映射到MR格式
+					try:
+						from models.triples_extraction import _map_chinese_to_mobile_device
+						mapped_name = _map_chinese_to_mobile_device(device_norm)
+						if mapped_name:
+							device_norm = mapped_name
+						elif re.search(r"MR", device_norm, re.IGNORECASE):
+							# 如果包含MR但不匹配标准格式，尝试规范化（如"MR5" -> "MR05"）
+							m = re.search(r"MR(\d{1,2})", device_norm, re.IGNORECASE)
+							if m:
+								num = int(m.group(1))
+								device_norm = f"MR{num:02d}"
+					except Exception:
+						# 如果映射失败，保持原名称
+						pass
+				
+				# 记录设备名称映射（规范化名称 -> 原始名称）
+				if device_norm != original_name or device_norm not in device_name_map:
+					device_name_map[device_norm] = original_name
+				
+				failure_time = record.get("failure_time")
+				failure_duration = record.get("failure_duration")
+				
+				# 确定开始和结束时间
+				start_time = float(failure_time) if failure_time is not None else float(current_time_min)
+				duration = float(failure_duration) if failure_duration is not None else 60.0
+				end_time = start_time + duration
+				
+				# 按时间段分组（与固定设备合并）
+				time_key = (start_time, end_time)
+				if time_key not in damaged_devices_by_time:
+					damaged_devices_by_time[time_key] = []
+				damaged_devices_by_time[time_key].append(device_norm)
+			
+			# 为每个时间段的设备创建事件
+			for (start, end), device_names in damaged_devices_by_time.items():
+				disturbance_events.append({
+					"id": event_id_counter,
+					"start": start,
+					"end": end,
+					"devices": sorted(device_names)
+				})
+				event_id_counter += 1
+			
+			# 6.4 查询损坏的资源（只查询在当前时间点仍然有效的）
+			damaged_resources_query = """
+			MATCH (r:Resource)
+			WHERE r.isDamaged = true
+			  AND r.failureTime IS NOT NULL
+			  AND (r.failureDuration IS NULL OR r.failureTime + COALESCE(r.failureDuration, 60.0) >= $current_time)
+			RETURN r.name AS name,
+			       r.failureTime AS failure_time,
+			       r.failureDuration AS failure_duration
+			ORDER BY r.name
+			"""
+			
+			damaged_resources_by_time = {}  # {(start, end): [resource_types]}
+			
+			for record in sess.run(damaged_resources_query, {"current_time": current_time_min}):
+				resource_name = record.get("name", "")
+				if not resource_name:
+					continue
+				
+				# 资源名称应该已经是R格式（如"R005"）
+				resource_type = resource_name
+				original_name = resource_name  # 保存原始名称（通常相同）
+				
+				# 记录资源名称映射（规范化名称 -> 原始名称）
+				# 通常资源名称已经是规范化格式，但为了统一性和后续写回KG，仍需记录映射
+				if resource_type not in resource_name_map:
+					resource_name_map[resource_type] = original_name
+				
+				failure_time = record.get("failure_time")
+				failure_duration = record.get("failure_duration")
+				
+				# 确定开始和结束时间
+				start_time = float(failure_time) if failure_time is not None else float(current_time_min)
+				duration = float(failure_duration) if failure_duration is not None else 60.0
+				end_time = start_time + duration
+				
+				# 按时间段分组
+				time_key = (start_time, end_time)
+				if time_key not in damaged_resources_by_time:
+					damaged_resources_by_time[time_key] = []
+				damaged_resources_by_time[time_key].append(resource_type)
+			
+			# 为每个时间段的资源创建事件
+			for (start, end), resource_types in damaged_resources_by_time.items():
+				disturbance_events.append({
+					"id": event_id_counter,
+					"start": start,
+					"end": end,
+					"resource_types": sorted(resource_types)
+				})
+				event_id_counter += 1
+			
+			snapshot["disturbance_events"] = disturbance_events
 			
 			# 注意：readme.md 示例中没有 site_unavailable 字段，因此不包含此字段
 		
@@ -715,7 +948,14 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 	# 创建反向映射：数字ID -> 原始名称
 	id_to_name_map = {plane_id: name for name, plane_id in aircraft_map.items()}
 	
-	return snapshot, id_to_name_map
+	# 创建包含所有映射关系的字典
+	all_mappings = {
+		"aircraft": id_to_name_map,  # {plane_id: name} - 飞机ID到名称的映射
+		"devices": device_name_map,  # {normalized_name: original_name} - 规范化设备名称到原始KG名称的映射
+		"resources": resource_name_map  # {normalized_name: original_name} - 规范化资源名称到原始KG名称的映射
+	}
+	
+	return snapshot, id_to_name_map, all_mappings
 
 
 __all__ = [
