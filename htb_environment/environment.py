@@ -26,12 +26,15 @@ class FixedDevice:
     # FIXME:按照勘误修改为2
     capacity: int = 2
     in_use: Set[int] = None
+    is_down: bool = False
 
     def __post_init__(self):
         if self.in_use is None:
             self.in_use = set()
 
     def can_serve(self, stand_id: int) -> bool:
+        if self.is_down:
+            return False
         return (stand_id in self.cover_stands) and (len(self.in_use) < self.capacity)
 
 
@@ -43,6 +46,7 @@ class MobileDevice:
     speed_m_s: float = 3.0
     busy_until_min: float = 0.0
     locked_by: Optional[int] = None
+    is_down: bool = False
 
     def eta_to_min(self, from_pos: np.ndarray, to_pos: np.ndarray, now_min: float) -> float:
         speed_m_per_min = float(self.speed_m_s) * 60.0
@@ -89,6 +93,8 @@ class ScheduleEnv:
             args, "penalty_idle_per_min", 0.05) if args is not None else 0.05)
         self.disturbance_events: List[Dict[str, Any]] = []
         self.disturbance_blocked_stands: Set[int] = set()
+        self.disturbance_blocked_resource_types: Set[str] = set()
+        self.disturbance_blocked_device_ids: Set[str] = set()
         self.disturbance_snapshots: Dict[int, Dict[str, Any]] = {}
         self.disturbance_history: List[Dict[str, Any]] = []
         self.disturbance_forced_planes: Set[int] = set()
@@ -312,6 +318,9 @@ class ScheduleEnv:
         need = job.required_resources
         if not need:
             return True, 0.0, []
+        for rt in need:
+            if self._is_resource_type_blocked(rt):
+                return False, 0.0, []
 
         plans: List[Tuple[str, object, float]] = []
         now = self.current_time
@@ -324,7 +333,7 @@ class ScheduleEnv:
 
             best_m, eta_mob = None, float("inf")
             for m in self.mobile_devices:
-                if m.rtype == rt and m.locked_by is None:
+                if m.rtype == rt and (not m.is_down) and m.locked_by is None:
                     from_pos = self.sites[m.loc_stand - 1].absolute_position
                     eta = m.eta_to_min(from_pos, site_pos, now)
                     if eta < eta_mob:
@@ -360,7 +369,7 @@ class ScheduleEnv:
                     eta_fix2 = self._eta_fixed_available(rt, stand_id)
                     best_m2, eta_mob2 = None, float("inf")
                     for m in self.mobile_devices:
-                        if m.rtype == rt and m.locked_by is None:
+                        if m.rtype == rt and (not m.is_down) and m.locked_by is None:
                             from_pos = self.sites[m.loc_stand -
                                                   1].absolute_position
                             eta = m.eta_to_min(from_pos, site_pos, now)
@@ -393,7 +402,7 @@ class ScheduleEnv:
                     # 被并发锁走了 → 尝试同类替代
                     best_m2, eta2 = None, float("inf")
                     for mm in self.mobile_devices:
-                        if mm.rtype == m.rtype and mm.locked_by is None:
+                        if mm.rtype == m.rtype and (not mm.is_down) and mm.locked_by is None:
                             from_pos = self.sites[mm.loc_stand -
                                                   1].absolute_position
                             eta = mm.eta_to_min(from_pos, site_pos, now)
@@ -490,6 +499,8 @@ class ScheduleEnv:
         self.episodes_situation = []
         self.episode_devices = []
         self.disturbance_blocked_stands.clear()
+        self.disturbance_blocked_resource_types.clear()
+        self.disturbance_blocked_device_ids.clear()
         self.disturbance_snapshots = {}
         self.disturbance_history = []
         self.disturbance_forced_planes.clear()
@@ -541,6 +552,7 @@ class ScheduleEnv:
             p.active_job_progress = {}
             p._job_total_durations = {}
             p._active_event_indices = []
+            p._handles_by_job = {}
             # 返回初始观测（若 MARL 框架不需要，可忽略）
         self._process_disturbance_timeline(initial=True)
         return self.get_obs()
@@ -683,6 +695,89 @@ class ScheduleEnv:
                 pass
         return sorted(s for s in stands if 1 <= s <= 28)
 
+    def _normalize_equipment_tokens(self, value) -> List[str]:
+        tokens: List[str] = []
+        if value is None:
+            return tokens
+        if isinstance(value, str):
+            parts = re.split(r'[;,\\s]+', value.strip())
+            tokens.extend([p for p in parts if p])
+            return tokens
+        if isinstance(value, (list, tuple, set)):
+            for entry in value:
+                entry_tokens = self._normalize_equipment_tokens(entry)
+                tokens.extend(entry_tokens)
+            return tokens
+        if isinstance(value, dict):
+            for entry in value.values():
+                tokens.extend(self._normalize_equipment_tokens(entry))
+            return tokens
+        tokens.append(str(value).strip())
+        return [t for t in tokens if t]
+
+    def _normalize_equipment_scope(self, event_payload: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+        resource_tokens: List[str] = []
+        for key in ("resource_types", "resources", "reqs", "req_resources"):
+            resource_tokens.extend(
+                self._normalize_equipment_tokens(event_payload.get(key)))
+        device_tokens: List[str] = []
+        for key in ("devices", "device_ids", "equipment"):
+            device_tokens.extend(
+                self._normalize_equipment_tokens(event_payload.get(key)))
+        tokens = resource_tokens + device_tokens
+        resource_types: Set[str] = set()
+        device_ids: Set[str] = set()
+        for token in tokens:
+            up = token.upper()
+            if not up:
+                continue
+            if re.match(r'^R\d+$', up):
+                resource_types.add(up)
+            else:
+                device_ids.add(up)
+        return sorted(resource_types), sorted(device_ids)
+
+    def _is_resource_type_blocked(self, rtype: str) -> bool:
+        return rtype.upper() in self.disturbance_blocked_resource_types
+
+    def _set_device_down(self, dev_id: str, down: bool, purge_usage: bool = True) -> bool:
+        target = None
+        for d in self.fixed_devices:
+            if d.dev_id.upper() == dev_id.upper():
+                target = d
+                break
+        if target is None:
+            for d in self.mobile_devices:
+                if d.dev_id.upper() == dev_id.upper():
+                    target = d
+                    break
+        if target is None:
+            return False
+        target.is_down = down
+        if not down:
+            return True
+        # When down, release locks/usage immediately
+        if purge_usage:
+            if isinstance(target, FixedDevice):
+                target.in_use.clear()
+            elif isinstance(target, MobileDevice):
+                target.locked_by = None
+                target.busy_until_min = self.current_time
+        return True
+
+    def _refresh_handles_cache(self, plane: Plane):
+        handles_map = getattr(plane, "_handles_by_job", {})
+        flat: List[object] = []
+        for hlist in handles_map.values():
+            flat.extend(hlist or [])
+        plane._last_handles = flat
+
+    def _assign_handles_to_jobs(self, plane: Plane, mapping: Dict[str, List[object]]):
+        plane._handles_by_job = {}
+        for code, handles in (mapping or {}).items():
+            plane._handles_by_job[code] = list(handles or [])
+        self._refresh_handles_cache(plane)
+
     def _load_disturbance_events(self) -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
         if not self.enable_disturbance:
@@ -717,13 +812,16 @@ class ScheduleEnv:
                 continue
             stands = self._normalize_stand_list(
                 evt.get("stands") or evt.get("sites") or evt.get("site_ids"))
-            if not stands:
+            resource_types, device_ids = self._normalize_equipment_scope(evt)
+            if not stands and not resource_types and not device_ids:
                 continue
             events.append({
                 "id": idx,
                 "start": float(start),
                 "end": float(end),
                 "stands": stands,
+                "resource_types": resource_types,
+                "device_ids": device_ids,
                 "started": False,
                 "completed": False,
                 "snapshot": None,
@@ -796,8 +894,12 @@ class ScheduleEnv:
         if isinstance(event.get("id"), int):
             self.disturbance_snapshots[event["id"]] = snapshot
         stands = set(event.get("stands", []))
+        resources = {r.upper()
+                     for r in event.get("resource_types", []) or []}
+        device_ids = {d.upper()
+                      for d in event.get("device_ids", []) or []}
         self.disturbance_blocked_stands.update(stands)
-        affected = []
+        affected: List[int] = []
         for pid, plane in enumerate(self.planes):
             site_id = self._plane_site_id(plane)
             if site_id is None or site_id not in stands:
@@ -809,34 +911,84 @@ class ScheduleEnv:
             else:
                 self._evacuate_plane_from_blocked(pid, plane, site_id)
                 affected.append(pid)
+        if resources or device_ids:
+            affected_eq = self._activate_equipment_disturbance(resources, device_ids)
+            affected.extend(affected_eq)
+        affected = sorted(set(affected))
         event["affected_planes"] = affected
         self.disturbance_history.append({
             "event_id": event.get("id"),
             "action": "start",
             "time": float(self.current_time),
             "stands": sorted(stands),
+             "resources": sorted(resources),
+             "devices": sorted(device_ids),
             "affected": affected
         })
-        print(f"[Disturbance] Event {event.get('id')} activated at {self.current_time:.2f} min, stands {sorted(stands)}")
+        meta = []
+        if stands:
+            meta.append(f"stands {sorted(stands)}")
+        if resources:
+            meta.append(f"resources {sorted(resources)}")
+        if device_ids:
+            meta.append(f"devices {sorted(device_ids)}")
+        desc = ", ".join(meta) if meta else "no scope"
+        print(f"[Disturbance] Event {event.get('id')} activated at {self.current_time:.2f} min, {desc}")
 
     def _complete_disturbance(self, event: Dict[str, Any]):
         event["completed"] = True
         stands = set(event.get("stands", []))
         self.disturbance_blocked_stands.difference_update(stands)
+        resources = {r.upper()
+                     for r in event.get("resource_types", []) or []}
+        if resources:
+            self.disturbance_blocked_resource_types.difference_update(resources)
+        devices = {d.upper() for d in event.get("device_ids", []) or []}
+        for dev_id in devices:
+            self._set_device_down(dev_id, False)
+            self.disturbance_blocked_device_ids.discard(dev_id)
         self.disturbance_history.append({
             "event_id": event.get("id"),
             "action": "end",
             "time": float(self.current_time),
-            "stands": sorted(stands)
+            "stands": sorted(stands),
+            "resources": sorted(resources),
+            "devices": sorted(devices)
         })
-        print(f"[Disturbance] Event {event.get('id')} completed at {self.current_time:.2f} min")
+        meta = []
+        if stands:
+            meta.append(f"stands {sorted(stands)}")
+        if resources:
+            meta.append(f"resources {sorted(resources)}")
+        if devices:
+            meta.append(f"devices {sorted(devices)}")
+        desc = ", ".join(meta) if meta else "no scope"
+        print(f"[Disturbance] Event {event.get('id')} completed at {self.current_time:.2f} min, {desc}")
+
+    def _activate_equipment_disturbance(self, resources: Set[str], device_ids: Set[str]) -> List[int]:
+        affected: List[int] = []
+        if resources:
+            self.disturbance_blocked_resource_types.update(resources)
+        if device_ids:
+            for dev_id in device_ids:
+                self.disturbance_blocked_device_ids.add(dev_id)
+                self._set_device_down(dev_id, True)
+        for pid, plane in enumerate(self.planes):
+            paused = self._pause_plane_jobs_for_equipment(
+                pid, plane, resources, device_ids)
+            if paused:
+                affected.append(pid)
+        return affected
 
     def _capture_global_state(self) -> Dict[str, Any]:
         snapshot = {
             "time": float(self.current_time),
             "planes": [],
             "stand_occupancy": copy.deepcopy(self.stand_current_occupancy),
-            "blocked_stands": sorted(self.disturbance_blocked_stands)
+            "blocked_stands": sorted(self.disturbance_blocked_stands),
+            "blocked_resources": sorted(
+                self.disturbance_blocked_resource_types),
+            "down_devices": sorted(self.disturbance_blocked_device_ids)
         }
         for plane in self.planes:
             plane_state = {
@@ -859,6 +1011,97 @@ class ScheduleEnv:
             return None
         return self.sites[plane.current_site_id].site_id
 
+    def _pause_plane_jobs_for_equipment(self, pid: int, plane: Plane,
+                                        blocked_resources: Set[str],
+                                        blocked_devices: Set[str]) -> bool:
+        if plane.status != "PROCESSING":
+            return False
+        if not blocked_resources and not blocked_devices:
+            return False
+        jobs: List[Job] = []
+        if getattr(plane, "_active_jobs", None):
+            jobs = list(plane._active_jobs)
+        elif plane.current_job_code:
+            parts = str(plane.current_job_code).split("+")
+            job_obj = self.jobs_obj.get_job(parts[0])
+            if job_obj:
+                jobs = [job_obj]
+        if not jobs:
+            return False
+        blocked_res = {r.upper() for r in blocked_resources or []}
+        blocked_dev_ids = {d.upper() for d in blocked_devices or []}
+        evt_idx_map = dict(getattr(plane, "_active_event_indices", []))
+        progress_map = dict(getattr(plane, "active_job_progress", {}))
+        total_map = dict(getattr(plane, "_job_total_durations", {}))
+        keep_jobs: List[Job] = []
+        paused_entries: List[Dict[str, Any]] = []
+        handles_map = getattr(plane, "_handles_by_job", {})
+        stand_id = self._plane_site_id(plane) or self.landing_virtual_site_id
+        for job in jobs:
+            req_hit = bool(blocked_res.intersection(
+                [r.upper() for r in job.required_resources or []]))
+            dev_hit = False
+            if not req_hit and blocked_dev_ids:
+                for handle in handles_map.get(job.code, []):
+                    dev = getattr(handle, "dev_id", None)
+                    if dev and dev.upper() in blocked_dev_ids:
+                        dev_hit = True
+                        break
+            if not req_hit and not dev_hit:
+                keep_jobs.append(job)
+                continue
+            remaining = float(progress_map.get(
+                job.code, plane.eta_proc_end))
+            total = float(total_map.get(job.code, remaining))
+            if remaining <= 1e-6:
+                continue
+            paused_entry = {
+                "job": job,
+                "remaining": remaining,
+                "code": job.code,
+                "reason": "device_unavailable"
+            }
+            paused_entries.append(paused_entry)
+            evt_idx = evt_idx_map.get(job.code)
+            if evt_idx is not None and 0 <= evt_idx < len(self.episodes_situation):
+                t, jid, sid, pid_evt, proc_min, move_min = self.episodes_situation[evt_idx]
+                elapsed = max(0.0, total - remaining)
+                self.episodes_situation[evt_idx] = (
+                    t, jid, sid, pid_evt, float(elapsed), move_min)
+            handles = handles_map.pop(job.code, [])
+            if handles:
+                self._release_resources(handles, plane, stand_id)
+        if not paused_entries:
+            return False
+        plane.paused_jobs = paused_entries + plane.paused_jobs
+        if keep_jobs:
+            if len(keep_jobs) > 1:
+                plane._active_jobs = keep_jobs
+                plane.current_job_code = "+".join(j.code for j in keep_jobs)
+            else:
+                plane._active_jobs = None
+                plane.current_job_code = keep_jobs[0].code
+            plane.active_job_progress = {
+                job.code: progress_map.get(job.code, 0.0) for job in keep_jobs}
+            plane._job_total_durations = {
+                job.code: total_map.get(job.code, plane.active_job_progress[job.code])
+                for job in keep_jobs}
+            plane._active_event_indices = [
+                (code, idx) for code, idx in evt_idx_map.items() if code in plane.active_job_progress]
+            plane.eta_proc_end = max(
+                plane.active_job_progress.values()) if plane.active_job_progress else 0.0
+            plane.status = "PROCESSING"
+        else:
+            plane._active_jobs = None
+            plane.current_job_code = None
+            plane.active_job_progress = {}
+            plane._job_total_durations = {}
+            plane._active_event_indices = []
+            plane.eta_proc_end = 0.0
+            plane.status = "IDLE"
+        self._refresh_handles_cache(plane)
+        return True
+
     def _pause_plane_due_to_disturbance(self, pid: int, plane: Plane, stand_id: int) -> bool:
         if plane.status != "PROCESSING":
             if not plane.paused_jobs:
@@ -868,6 +1111,7 @@ class ScheduleEnv:
         if handles:
             self._release_resources(handles, plane, stand_id)
             plane._last_handles = []
+            plane._handles_by_job = {}
         if stand_id in self.stand_current_occupancy:
             self.stand_current_occupancy[stand_id] = None
             self.last_leave_time_by_stand[stand_id] = self.current_time
@@ -1056,7 +1300,8 @@ class ScheduleEnv:
                 (job.code, len(self.episodes_situation) - 1)]
             if not site_cur.is_runway:
                 self.stand_current_occupancy[site_cur.site_id] = pid
-            plane._last_handles = handles
+            self._assign_handles_to_jobs(
+                plane, {job.code: handles or []})
             plane.paused_jobs.pop(idx)
             return True
         return False
@@ -1328,6 +1573,7 @@ class ScheduleEnv:
                 cur_site_id = self.sites[plane.current_site_id].site_id if plane.current_site_id is not None else 1
                 self._release_resources(
                     getattr(plane, "_last_handles", None), plane, cur_site_id)
+                plane._handles_by_job = {}
 
                 # 这一步完成的作业集合（并行 or 单作业）
                 finished_codes = []
@@ -1353,6 +1599,7 @@ class ScheduleEnv:
 
                 plane._active_jobs = None
                 plane._last_handles = []  # 统一清空
+                plane._handles_by_job = {}
 
                 # 清占用&互锁时间
                 if plane.current_site_id is not None:
@@ -1450,11 +1697,13 @@ class ScheduleEnv:
                         if self.enable_long_occupy and job_for_site.code in ("ZY03", "ZY02") and job_for_site.required_resources:
                             plane.long_occupy.add(
                                 job_for_site.required_resources[0])
-                        plane._last_handles = handles
+                        self._assign_handles_to_jobs(
+                            plane, {job_for_site.code: handles or []})
             else:
-                durations, flat_handles = [], []
+                durations = []
                 event_indices = []
                 valid_jobs = []
+                job_handle_map: Dict[str, List[object]] = {}
                 for (j, wait_min, hlist) in accepted:
                     d = float(wait_min + self._proc_time_minutes(j,
                                                                  plane, site_cur, site_cur))
@@ -1474,12 +1723,12 @@ class ScheduleEnv:
                             mob_ids.append(h.dev_id)
                     self.episode_devices.append(
                         {"FixedDevices": fix_ids, "MobileDevices": mob_ids})
-                    flat_handles.extend(hlist or [])
+                    job_handle_map[j.code] = list(hlist or [])
                     event_indices.append((j.code, len(self.episodes_situation) - 1))
 
                 if durations:
                     plane._active_jobs = valid_jobs
-                    plane._last_handles = flat_handles
+                    self._assign_handles_to_jobs(plane, job_handle_map)
                     plane.current_job_code = "+".join(
                         [j.code for j in plane._active_jobs])
                     plane.eta_proc_end = max(durations)
@@ -1521,6 +1770,8 @@ class ScheduleEnv:
         if self.enable_disturbance:
             info["disturbance"] = {
                 "active_stands": sorted(self.disturbance_blocked_stands),
+                "blocked_resources": sorted(self.disturbance_blocked_resource_types),
+                "down_devices": sorted(self.disturbance_blocked_device_ids),
                 "history": copy.deepcopy(self.disturbance_history)
             }
 
@@ -1548,6 +1799,5 @@ class ScheduleEnv:
                     j.time_span *= scale
         elif tp == "device_fail":
             dev_id = event["dev_id"]
-            for d in self.fixed_devices:
-                if d.dev_id == dev_id:
-                    d.capacity = 0
+            self._set_device_down(dev_id, True)
+            self.disturbance_blocked_device_ids.add(dev_id.upper())

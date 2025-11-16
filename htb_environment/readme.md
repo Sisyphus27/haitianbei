@@ -28,15 +28,17 @@ python main.py --learn False --load_model True --n_agents 60 --batch_mode --batc
 ## 扰动事件配置
 
 - `--enable_disturbance`：开启扰动事件逻辑，环境会在事件起止时间内自动封锁对应停机位，并对受到影响的飞机进行暂停处理，记录当时的全局状态快照。
-- `--disturbance_events`：JSON 字符串或 JSON 文件路径，描述一组扰动事件。每个事件包含 `start`、`end`（分钟）以及 `stands`（如 `[5,6,7]` 或 `"5-10,12"`）。
+- `--disturbance_events`：JSON 字符串或 JSON 文件路径，描述一组扰动事件。每个事件至少包含 `start`、`end`（分钟），并可指定 `stands`（如 `[5,6,7]` 或 `"5-10,12"`）、`resource_types`（如 `["R002","R005"]`）或 `devices`/`device_ids`（如 `["FR05","MR12"]`）。当 `resource_types` 或 `devices` 被设置时，环境会把对应保障设备标记为不可用，正在使用这些设备的作业会被暂停并记录到 `paused_jobs` 中，调度器在飞机空闲时会优先恢复这些作业。
 
 示例：
 
 ```bash
-python main.py --learn False --load_model False --n_agents 12 --batch_mode --batch_size_per_batch 12 --batches_count 1 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --evaluate_epoch 1 --result_name disturbance_test --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":"5-10"}]'
+python main.py --learn False --load_model False --n_agents 12 --batch_mode --batch_size_per_batch 12 --batches_count 1 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --evaluate_epoch 1 --result_name disturbance_test --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":"5,6,7,8,9,10"},{"start":470,"end":520,"resource_types":["R002","R005"]},{"start":530,"end":570,"devices":["FR09","MR05"]}]'
+
+python main.py --learn False --load_model False --n_agents 12 --batch_mode --batch_size_per_batch 12 --batches_count 1 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --evaluate_epoch 1 --result_name disturbance_test --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":"5-10"},{"start":470,"end":520,"resource_types":["R002","R005"]},{"start":530,"end":570,"devices":["FR09","MR05"]}]'
 ```
 
-上述命令会在 450~550 分钟内封锁 5~10 号停机位，被迫停止保障的飞机会记录剩余作业进度并在新站位继续未完成的作业，事件结束后自动恢复站位可用性。
+上述命令会在 450~550 分钟内封锁 5~10 号停机位，被迫停止保障的飞机会记录剩余作业进度并在新站位继续未完成的作业，事件结束后自动恢复站位可用性。470~520 分钟内 `R002/R005` 资源类型被标记为不可用，所有依赖这些资源的飞机作业会被暂停并写入 `paused_jobs`，待设备恢复后优先重新调度；530~570 分钟期间指定的 `FR09/MR05` 设备因故障下线，只有使用这些具体设备的作业会暂停，其它同类型设备仍可继续服务。
 
 ## 调度状态输入与快照推理指南
 
@@ -122,6 +124,8 @@ python main.py --learn False --load_model False --n_agents 12 --batch_mode --bat
     }
   ],
   "blocked_stands": [5,6,7,8,9],
+  "blocked_resources": ["R002"],
+  "down_devices": ["FR05"],
   "arrival_plan": { "6": 500.0, "7": 505.0 },
   "devices": {
     "fixed": {
@@ -148,6 +152,7 @@ python main.py --learn False --load_model False --n_agents 12 --batch_mode --bat
 - `planes`：每架飞机的状态（`active_job` 支持 `ZY04+ZY05` 并行写法；`paused_jobs` 记录剩余作业）。
 - `stand_occupancy`：站位是否被占用。
 - `blocked_stands`：当前封锁站位。
+- `blocked_resources` / `down_devices`：处于扰动中的保障资源类型与具体设备，快照恢复后 `_reapply_disturbance_state` 会根据这些字段重新设置设备可用性（并在 `disturbance` 信息中返回）。
 - `arrival_plan`（可选）：覆盖 `env.arrival_plan`，用于尚未落地的飞机。
 - `devices`（可选）：固定/移动设备的占用、容量、位置。
 - `site_unavailable`（可选）：额外的封控时间窗。

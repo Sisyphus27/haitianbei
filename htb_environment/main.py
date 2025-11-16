@@ -135,6 +135,8 @@ def _maybe_run_snapshot_mode(args) -> bool:
     if env.enable_disturbance:
         summary["disturbance"] = {
             "active_stands": sorted(env.disturbance_blocked_stands),
+            "blocked_resources": sorted(env.disturbance_blocked_resource_types),
+            "down_devices": sorted(env.disturbance_blocked_device_ids),
             "history": copy.deepcopy(env.disturbance_history)
         }
 

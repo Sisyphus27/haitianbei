@@ -67,6 +67,8 @@
     }
   },
   "disturbance_events": [
-    { "id": 0, "start": 500.0, "end": 540.0, "stands": [5,6,7,8,9] }
+    { "id": 0, "start": 500.0, "end": 540.0, "stands": [5,6,7,8,9] },
+    { "id": 1, "start": 486.0, "end": 525.0, "resource_types": ["R005"] },
+    { "id": 2, "start": 488.0, "end": 520.0, "devices": ["FR5", "MR05"] }
   ]
 }

@@ -217,13 +217,28 @@ def _restore_disturbance_events(env: ScheduleEnv, snapshot: Dict[str, Any]) -> N
                 continue
             if 1 <= sid <= 31:
                 stands.append(sid)
-        if not stands:
+        resource_types = []
+        for token in evt.get("resource_types") or []:
+            try:
+                resource_types.append(str(token).upper())
+            except Exception:
+                continue
+        devices_payload = evt.get("device_ids") or evt.get("devices") or []
+        device_ids = []
+        for token in devices_payload:
+            try:
+                device_ids.append(str(token).upper())
+            except Exception:
+                continue
+        if not stands and not resource_types and not device_ids:
             continue
         restored.append({
             "id": evt.get("id", idx),
             "start": start,
             "end": end,
             "stands": stands,
+            "resource_types": resource_types,
+            "device_ids": device_ids,
             "started": False,
             "completed": False,
             "snapshot": evt.get("snapshot"),
@@ -234,17 +249,40 @@ def _restore_disturbance_events(env: ScheduleEnv, snapshot: Dict[str, Any]) -> N
     env.disturbance_events = restored
 
 
-def _reapply_disturbance_state(env: ScheduleEnv, blocked_fallback: Iterable[int]) -> None:
+def _reapply_disturbance_state(
+    env: ScheduleEnv,
+    blocked_fallback: Iterable[int],
+    resource_fallback: Iterable[str],
+    device_fallback: Iterable[str]
+) -> None:
     fallback = set(int(s) for s in blocked_fallback or [])
+    resource_set = {str(r).upper()
+                    for r in (resource_fallback or []) if str(r).strip()}
+    device_set = {str(d).upper()
+                  for d in (device_fallback or []) if str(d).strip()}
     if not env.enable_disturbance or not getattr(env, "disturbance_events", []):
         env.disturbance_blocked_stands = fallback
+        env.disturbance_blocked_resource_types = set(resource_set)
+        env.disturbance_blocked_device_ids = set(device_set)
+        for dev_id in env.disturbance_blocked_device_ids:
+            env._set_device_down(dev_id, True, purge_usage=False)
         return
     env.disturbance_blocked_stands = set()
+    env.disturbance_blocked_resource_types = set()
+    env.disturbance_blocked_device_ids = set()
     env.disturbance_forced_planes.clear()
     env.disturbance_forced_from.clear()
     env.disturbance_history = list(getattr(env, "disturbance_history", []))
+    for dev in env.fixed_devices:
+        dev.is_down = False
+    for dev in env.mobile_devices:
+        dev.is_down = False
     env._process_disturbance_timeline(initial=True)
     env.disturbance_blocked_stands.update(fallback)
+    env.disturbance_blocked_resource_types.update(resource_set)
+    env.disturbance_blocked_device_ids.update(device_set)
+    for dev_id in env.disturbance_blocked_device_ids:
+        env._set_device_down(dev_id, True, purge_usage=False)
 
 
 def restore_env_from_snapshot(env: ScheduleEnv, snapshot: Dict[str, Any]) -> None:
@@ -436,7 +474,10 @@ def restore_env_from_snapshot(env: ScheduleEnv, snapshot: Dict[str, Any]) -> Non
     # Devices (optional)
     _apply_device_snapshot(env, snapshot.get("devices"))
     _reapply_disturbance_state(
-        env, snapshot.get("blocked_stands", []))
+        env,
+        snapshot.get("blocked_stands", []),
+        snapshot.get("blocked_resources", []),
+        snapshot.get("down_devices", []))
 
 
 def greedy_idle_policy(env: ScheduleEnv) -> List[int]:

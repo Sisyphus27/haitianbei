@@ -49,6 +49,7 @@ class Plane:
         self.active_job_progress: Dict[str, float] = {}
         self._job_total_durations: Dict[str, float] = {}
         self._active_event_indices: List[Tuple[str, int]] = []
+        self._handles_by_job: Dict[str, List[Any]] = {}
 
 
     @property
@@ -97,3 +98,4 @@ class Plane:
         self.active_job_progress = {}
         self._job_total_durations = {}
         self._active_event_indices = []
+        self._handles_by_job = {}
