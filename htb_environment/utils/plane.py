@@ -51,7 +51,6 @@ class Plane:
         self._active_event_indices: List[Tuple[str, int]] = []
         self._handles_by_job: Dict[str, List[Any]] = {}
 
-
     @property
     def left_jobs_count(self) -> int:
         total = len(self.task.jobs.jobs_object_list)
@@ -64,6 +63,7 @@ class Plane:
         self.eta_move_end = move_min
         self.move_last_min = move_min
 
+    # LOG：互斥关系实现逻辑
     def start_job(self, job: Job, process_min: float):
         self.status = "PROCESSING"
         self.current_job_code = job.code
@@ -84,6 +84,7 @@ class Plane:
             self.eta_proc_end = max(0.0, self.eta_proc_end - delta_t)
 
 # utils/plane.py
+    # LOG：互斥关系实现逻辑
     def finish_job(self, job: Job):
         if job.time_span > 0:
             self.time_spent += job.time_span

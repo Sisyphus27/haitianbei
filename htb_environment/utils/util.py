@@ -4,6 +4,8 @@
 import math
 
 # 这个函数没用
+
+
 def left_planes(chosen_plane, current_idle_planes):
     res = []
     for eve in current_idle_planes:
@@ -35,6 +37,7 @@ def advance_by_min_time(min_time, state_left_time):
     return res
 
 
+# LOG：路径规划实现逻辑
 # 返回飞机在两个战位之间调运的时间
 def count_path_on_road(initial_pos, end_pos, speed):
     return math.sqrt((end_pos[0]-initial_pos[0]) ** 2 + (end_pos[1]-initial_pos[1]) ** 2) / speed
@@ -53,5 +56,5 @@ def count_occupied_density(station, state, row, col, n_agents):
             sum += 1
             if state[station[nr][nc]][0] != n_agents+1:
                 count += 1
-    
+
     return count/sum
