@@ -150,7 +150,7 @@ class ScheduleEnv:
         # MARL接口所需
         self.n_agents = 0
         self.n_actions = len(self.sites) + 3  # 所有站位/跑道 + WAIT + BUSY + DONE
-        self.episode_limit = 10000  # 可按需要调整
+        self.episode_limit = 2000  # 可按需要调整
         self._solve_reserved = []
 
         # 记录（时刻, job_id, site_id, plane_id, proc_min, move_min）
@@ -302,6 +302,12 @@ class ScheduleEnv:
             if getattr(j, "group", "") == "保障" and j.code not in p.finished_codes:
                 return False
         return True
+
+    def _plane_has_support_left(self, p) -> bool:
+        for j in self.jobs_obj.jobs_object_list:
+            if getattr(j, "group", "") == "保障" and j.code not in p.finished_codes:
+                return True
+        return False
 
     def _outbound_ready_for(self, plane):
         """当该机支持完成且已解固时，返回可执行的出场作业（ZY_S / ZY_F），用于跑道位。"""
@@ -648,6 +654,37 @@ class ScheduleEnv:
             # 返回初始观测（若 MARL 框架不需要，可忽略）
         self._process_disturbance_timeline(initial=True)
         return self.get_obs()
+
+    def _pick_stage_runway_index(self, pid: int) -> Optional[int]:
+        preferred = getattr(self.args, "stage_runway_order", [29, 30, 31])
+        for rid in preferred:
+            idx = next((i for i, s in enumerate(self.sites)
+                        if s.site_id == rid), None)
+            if idx is None:
+                continue
+            if self._runway_available_outbound(rid):
+                return idx
+        return None
+
+    def _auto_stage_if_ready(self, pid: int) -> Tuple[bool, float]:
+        plane = self.planes[pid]
+        if plane.status != "IDLE":
+            return False, 0.0
+        if plane.current_site_id is None or not (0 <= plane.current_site_id < len(self.sites)):
+            return False, 0.0
+        site_cur = self.sites[plane.current_site_id]
+        if site_cur.is_runway:
+            return False, 0.0
+        if not self._plane_support_done(plane):
+            return False, 0.0
+        if "ZY_L" not in plane.finished_codes:
+            return False, 0.0
+        runway_idx = self._pick_stage_runway_index(pid)
+        if runway_idx is None:
+            return False, 0.0
+        moved, penalty = self._handle_move_action(
+            pid, runway_idx, allow_early_runway=True)
+        return moved, penalty
 
     def get_env_info(self):
         # 先构造 state 用来取维度（我们刚刚实现了 get_state，未 reset 也能返回占位）
@@ -1443,18 +1480,22 @@ class ScheduleEnv:
             return mask
 
         # 候选作业（去掉 ZY_Z）
-        cand_jobs: List[Job] = self.task_obj.graph.enabled(plane.finished_codes, plane.ongoing_mutex) \
+        ready_jobs: List[Job] = self.task_obj.graph.enabled(plane.finished_codes, plane.ongoing_mutex) \
             if (self.enable_deps or self.enable_mutex) else self.task_obj.jobs.jobs_object_list[:1]
 
-        # 动态注入出场作业（只允许在跑道位被选择）
-        cand_jobs = list(cand_jobs) + self._outbound_ready_for(plane)
+        outbound_jobs = self._outbound_ready_for(plane)
+        cand_jobs: List[Job] = list(ready_jobs)
+
+        batch_ready = self._batch_support_done_for_plane(i)
+        if batch_ready:
+            cand_jobs.extend(outbound_jobs)
 
         cand_jobs = [j for j in cand_jobs if j.code != "ZY_Z"]
 
-        # 批次离场门控（按机/批次门控出场作业）
-        if not self._batch_support_done_for_plane(i):
-            cand_jobs = [j for j in cand_jobs if (j.group != "出场")]
-        if len(cand_jobs) == 0:
+        can_stage_on_runway = self._plane_support_done(
+            plane) and ("ZY_L" in plane.finished_codes)
+
+        if len(cand_jobs) == 0 and (not can_stage_on_runway):
             mask[-3] = 1
             return mask
 
@@ -1479,7 +1520,7 @@ class ScheduleEnv:
             for j in cand_jobs:
                 j_id = self.jobs_obj.code2id()[j.code]
                 if site.is_runway:
-                    if (j.code in ("ZY_S", "ZY_F")) and self._runway_available_outbound(site.site_id):
+                    if batch_ready and (j.code in ("ZY_S", "ZY_F")) and self._runway_available_outbound(site.site_id):
                         ok = True
 
                 else:
@@ -1494,6 +1535,9 @@ class ScheduleEnv:
                     ok = True
                 if ok:
                     break
+            if (not ok) and site.is_runway and can_stage_on_runway:
+                if self._runway_available_outbound(site.site_id):
+                    ok = True
             if ok:
                 mask[idx] = 1
 
@@ -1517,6 +1561,93 @@ class ScheduleEnv:
 
     # 关键逻辑：解析动作→ETA推进→到位/开工/完工→释放/干涉时钟
     # LOG:核心step()
+
+    def _handle_move_action(self, pid: int, target_idx: int, allow_early_runway: bool = False) -> Tuple[bool, float]:
+        plane: Plane = self.planes[pid]
+        site_to: Site = self.sites[target_idx]
+        penalty = 0.0
+
+        if site_to.is_runway and (not allow_early_runway) and self._plane_has_support_left(plane):
+            penalty += self.penalty_early_runway
+            return False, penalty
+
+        speed_m_per_min = self._speed_m_per_min()
+        move_min = count_path_on_road(
+            plane.position, site_to.absolute_position, speed_m_per_min)
+
+        mv = None
+        if site_to.is_runway:
+            if "ZY_L" in plane.finished_codes:  # 去跑道需先解固
+                mv = "ZY_T"
+        else:
+            if ("ZY_Z" in plane.finished_codes) and ("ZY01" not in plane.finished_codes):
+                mv = "ZY_M"
+            elif ("ZY_L" in plane.finished_codes) and ("ZY01" not in plane.finished_codes):
+                mv = "ZY_T"
+
+        plane.move_code = mv
+        cur_sid = None
+        if plane.current_site_id is not None and 0 <= plane.current_site_id < len(self.sites):
+            cur_sid = self.sites[plane.current_site_id].site_id
+
+        if mv is None or (cur_sid == site_to.site_id) or not (float(move_min) > 1e-9):
+            return False, penalty
+
+        if mv == "ZY_T":
+            jobT = self.jobs_obj.get_job("ZY_T")
+            from_site = self.sites[self.planes[pid].current_site_id] if self.planes[
+                pid].current_site_id is not None else None
+            if from_site is None:
+                return False, penalty
+            can, wait_min, handles = self._alloc_resources_for_job(
+                jobT, from_site.site_id, plane)
+            if not can:
+                return False, penalty
+
+            if not site_to.is_runway:
+                self._reserve_incoming_stand(site_to.site_id, pid)
+            if cur_sid is not None and cur_sid in self.stand_current_occupancy:
+                self._release_stand(cur_sid, pid)
+
+            tow_speed_m_per_min = self._speed_m_per_min()
+            for h in handles or []:
+                if isinstance(h, MobileDevice) and h.rtype == "R014":
+                    tow_speed_m_per_min = float(h.speed_m_s) * 60.0
+                    break
+            tow_min = count_path_on_road(
+                from_site.absolute_position, site_to.absolute_position, tow_speed_m_per_min)
+            total_move = float(wait_min + tow_min)
+
+            jid = self.jobs_obj.code2id()[mv]
+            self.episodes_situation.append(
+                (self.current_time, jid, site_to.site_id, pid, 0.0, total_move))
+            fix_ids, mob_ids = [], []
+            for h in handles or []:
+                if isinstance(h, MobileDevice):
+                    mob_ids.append(h.dev_id)
+                elif isinstance(h, FixedDevice):
+                    fix_ids.append(h.dev_id)
+            self.episode_devices.append(
+                {"FixedDevices": fix_ids, "MobileDevices": mob_ids})
+
+            plane._move_handles = handles
+            plane.start_move(
+                to_site_id=site_to.site_id - 1, move_min=total_move)
+            return True, penalty
+        else:
+            if cur_sid is not None and cur_sid in self.stand_current_occupancy:
+                self._release_stand(cur_sid, pid)
+
+            if not site_to.is_runway:
+                self._reserve_incoming_stand(site_to.site_id, pid)
+            jid = self.jobs_obj.code2id()[mv]
+            self.episodes_situation.append(
+                (self.current_time, jid, site_to.site_id, pid, 0.0, float(move_min)))
+            self.episode_devices.append(
+                {"FixedDevices": [], "MobileDevices": []})
+            plane.start_move(
+                to_site_id=site_to.site_id - 1, move_min=move_min)
+            return True, penalty
 
     def step(self, actions: List[int]):
         prev_evt_len = len(self.episodes_situation)
@@ -1559,101 +1690,17 @@ class ScheduleEnv:
             if "ZY_Z" not in plane.finished_codes or just_landed[pid]:
                 continue  # 未落地/刚落地，本步不执行动作
 
+            moved_auto, penalty_auto = self._auto_stage_if_ready(pid)
+            inst_reward += penalty_auto
+            if moved_auto:
+                continue
+
             if act < len(self.sites):
-                site_to: Site = self.sites[act]
-
-                def _has_support_left(p):
-                    # 支持：除 ZY_S/ZY_F/ZY_Z/ZY_L 之外的“保障组”是否还有未完成
-                    for j in self.jobs_obj.jobs_object_list:
-                        if j.group == "保障" and j.code not in p.finished_codes:
-                            return True
-                    return False
-                if site_to.is_runway and (_has_support_left(plane) or (not self._batch_support_done_for_plane(pid))):
-                    inst_reward += self.penalty_early_runway   # 惩罚
+                moved, penalty = self._handle_move_action(pid, act)
+                inst_reward += penalty
+                if moved:
                     continue
-                speed_m_per_min = self._speed_m_per_min()
-                move_min = count_path_on_road(
-                    plane.position, site_to.absolute_position, speed_m_per_min)
-
-                mv = None
-                if site_to.is_runway:
-                    if "ZY_L" in plane.finished_codes:  # 去跑道需先解固
-                        mv = "ZY_T"
-                else:
-                    if ("ZY_Z" in plane.finished_codes) and ("ZY01" not in plane.finished_codes):
-                        mv = "ZY_M"
-                    elif ("ZY_L" in plane.finished_codes) and ("ZY01" not in plane.finished_codes):
-                        mv = "ZY_T"
-
-                plane.move_code = mv
-                cur_sid = None
-                if plane.current_site_id is not None and 0 <= plane.current_site_id < len(self.sites):
-                    cur_sid = self.sites[plane.current_site_id].site_id
-                # 只有目标站位与当前站位不同且有实际移动距离才考虑移动
-                if mv is not None and (cur_sid != site_to.site_id) and (float(move_min) > 1e-9):
-                    if mv == "ZY_T":
-                        jobT = self.jobs_obj.get_job("ZY_T")
-                        # 牵引车先到“当前站位”再牵引到“目标站位”
-                        from_site = self.sites[self.planes[pid].current_site_id] if self.planes[
-                            pid].current_site_id is not None else None
-                        if from_site is None:
-                            # 没有明确的 from_site（极端情况），退化为不可执行
-                            continue
-                        # 为 ZY_T 分配设备（会返回等待牵引车到位的 extra_wait）
-                        can, wait_min, handles = self._alloc_resources_for_job(
-                            jobT, from_site.site_id, plane)
-                        if not can:
-                            # 分配不到牵引车，取消本步移动
-                            continue
-
-                        # ★ 确认可以牵引后，释放原停机位占用
-                        if not site_to.is_runway:
-                            self._reserve_incoming_stand(site_to.site_id, pid)
-                        if cur_sid is not None and cur_sid in self.stand_current_occupancy:
-                            self._release_stand(cur_sid, pid)
-
-                        # 牵引“行驶时间”用移动设备速度估计：取被锁定的 R014 中的第一台
-                        tow_speed_m_per_min = self._speed_m_per_min()
-                        for h in handles or []:
-                            if isinstance(h, MobileDevice) and h.rtype == "R014":
-                                tow_speed_m_per_min = float(h.speed_m_s) * 60.0
-                                break
-                        tow_min = count_path_on_road(
-                            from_site.absolute_position, site_to.absolute_position, tow_speed_m_per_min)
-                        total_move = float(wait_min + tow_min)
-
-                        # 记录移动事件（move_min=等待+牵引）
-                        jid = self.jobs_obj.code2id()[mv]
-                        self.episodes_situation.append(
-                            (self.current_time, jid, site_to.site_id, pid, 0.0, total_move))
-                        fix_ids, mob_ids = [], []
-                        for h in handles or []:
-                            if isinstance(h, MobileDevice):
-                                mob_ids.append(h.dev_id)
-                            elif isinstance(h, FixedDevice):
-                                fix_ids.append(h.dev_id)
-                        self.episode_devices.append(
-                            {"FixedDevices": fix_ids, "MobileDevices": mob_ids})
-
-                        plane._move_handles = handles
-                        plane.start_move(
-                            to_site_id=site_to.site_id - 1, move_min=total_move)
-                    else:
-                        # ZY_M：从当前站位或跑道滑行到目标站位
-                        # 若当前在某个停机位，开始滑行时释放占用
-                        if cur_sid is not None and cur_sid in self.stand_current_occupancy:
-                            self._release_stand(cur_sid, pid)
-
-                        if not site_to.is_runway:
-                            self._reserve_incoming_stand(site_to.site_id, pid)
-                        jid = self.jobs_obj.code2id()[mv]
-                        self.episodes_situation.append(
-                            (self.current_time, jid, site_to.site_id, pid, 0.0, float(move_min)))
-                        self.episode_devices.append(
-                            {"FixedDevices": [], "MobileDevices": []})
-                        plane.start_move(
-                            to_site_id=site_to.site_id - 1, move_min=move_min)
-                    continue
+            # 其它动作（WAIT/BUSY/DONE）保持当前逻辑，无需额外处理
 
         # (3) 时间推进
         etas = []
@@ -1772,13 +1819,15 @@ class ScheduleEnv:
             if self._try_resume_paused_jobs(pid, plane, site_cur):
                 continue
 
-            ready = self.task_obj.graph.enabled(plane.finished_codes, plane.ongoing_mutex) \
+            batch_ready = self._batch_support_done_for_plane(pid)
+            ready_iter = self.task_obj.graph.enabled(plane.finished_codes, plane.ongoing_mutex) \
                 if (self.enable_deps or self.enable_mutex) else self.task_obj.jobs.jobs_object_list[:1]
+            ready = list(ready_iter)
             if site_cur.is_runway:
-                if self._batch_support_done_for_plane(pid):
-                    ready = list(ready) + self._outbound_ready_for(plane)
+                if batch_ready:
+                    ready += self._outbound_ready_for(plane)
                 else:
-                    ready = list(ready)
+                    ready = [j for j in ready if j.group != "出场"]
             site_cap_ids = set(site_cur.resource_ids_list)
             pack = self.task_obj.graph.pack_parallel(ready, site_cap_ids)
             pack = [j for j in pack if (
@@ -1792,11 +1841,14 @@ class ScheduleEnv:
                     accepted.append((j, wait_min, handles))
 
             if not accepted:
-                cand_jobs = self.task_obj.graph.enabled(plane.finished_codes, plane.ongoing_mutex) \
+                cand_iter = self.task_obj.graph.enabled(plane.finished_codes, plane.ongoing_mutex) \
                     if (self.enable_deps or self.enable_mutex) else self.task_obj.jobs.jobs_object_list[:1]
+                cand_jobs = list(cand_iter)
                 if site_cur.is_runway:
-                    cand_jobs = list(cand_jobs) + \
-                        self._outbound_ready_for(plane)
+                    if batch_ready:
+                        cand_jobs += self._outbound_ready_for(plane)
+                    else:
+                        cand_jobs = [j for j in cand_jobs if j.group != "出场"]
                 job_for_site = None
                 for j in cand_jobs:
                     j_id = self.jobs_obj.code2id()[j.code]

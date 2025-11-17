@@ -23,6 +23,8 @@
 
 ```bash
 python main.py --learn False --load_model True --n_agents 60 --batch_mode --batch_size_per_batch 12 --batches_count 5 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --result_name my_multi_batch_run --evaluate_epoch 1
+
+python main.py --learn False --load_model True --n_agents 18 --batch_mode --batch_size_per_batch 6 --batches_count 3 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --result_name my_multi_batch_run --evaluate_epoch 1
 ```
 
 ## 扰动事件配置

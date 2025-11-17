@@ -164,6 +164,7 @@ def marl_agent_wrapper():
     if getattr(args, 'batch_mode', False):
         args.learn = False
         args.load_model = False
+        # pass
     # 先构造带 args 的环境
     env = ScheduleEnv(args)
 

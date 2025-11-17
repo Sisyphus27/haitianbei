@@ -1,0 +1,7067 @@
+{
+    "plan": [
+        {
+            "Time": "07:00:00",
+            "Plane_ID": 0,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:01:00",
+            "Plane_ID": 0,
+            "Start_Site": 0,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.25,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:01:15",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:01:15",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:02:15",
+            "Plane_ID": 1,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:03:15",
+            "Plane_ID": 1,
+            "Start_Site": 0,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.13437096247164249,
+            "FixedDevices": [
+                "FR28"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:03:15",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR8"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:03:15",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR16"
+            ],
+            "MobileDevices": [
+                "MR17"
+            ]
+        },
+        {
+            "Time": "07:03:15",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 5,
+            "process_time": 3.1756820922315683,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR12"
+            ],
+            "MobileDevices": [
+                "MR13"
+            ]
+        },
+        {
+            "Time": "07:03:15",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 6,
+            "process_time": 3.1756820922315683,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR24"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:03:15",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:03:15",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:03:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:03:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:04:23",
+            "Plane_ID": 2,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:05:23",
+            "Plane_ID": 2,
+            "Start_Site": 0,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.08975274678557507,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:05:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:05:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR15"
+            ]
+        },
+        {
+            "Time": "07:05:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 5,
+            "process_time": 3.111111111111086,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR11"
+            ]
+        },
+        {
+            "Time": "07:05:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 6,
+            "process_time": 3.111111111111086,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:05:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:05:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:05:28",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:05:28",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:06:28",
+            "Plane_ID": 3,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:14",
+            "Plane_ID": 0,
+            "Start_Site": 27,
+            "End_Site": 1,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.32829526005987014,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:14",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:14",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR14"
+            ]
+        },
+        {
+            "Time": "07:07:14",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 5,
+            "process_time": 3.3513641844631366,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR10"
+            ]
+        },
+        {
+            "Time": "07:07:14",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 6,
+            "process_time": 3.3513641844631366,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:14",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:14",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:28",
+            "Plane_ID": 3,
+            "Start_Site": 0,
+            "End_Site": 20,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.3004626062886658,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:34",
+            "Plane_ID": 3,
+            "Start_Site": 20,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.25,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:34",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR17"
+            ],
+            "MobileDevices": [
+                "MR06"
+            ]
+        },
+        {
+            "Time": "07:07:34",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 8,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:34",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR21"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:34",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR1"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:34",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:34",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR18"
+            ]
+        },
+        {
+            "Time": "07:07:34",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:49",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:07:49",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:08:49",
+            "Plane_ID": 4,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:23",
+            "Plane_ID": 1,
+            "Start_Site": 11,
+            "End_Site": 20,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.26874192494328497,
+            "FixedDevices": [
+                "FR28"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:23",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR8"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:23",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR16"
+            ],
+            "MobileDevices": [
+                "MR17"
+            ]
+        },
+        {
+            "Time": "07:09:23",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR12"
+            ],
+            "MobileDevices": [
+                "MR13"
+            ]
+        },
+        {
+            "Time": "07:09:23",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR24"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:23",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:23",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:39",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:39",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 8,
+            "process_time": 2.1756820922315683,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR19"
+            ],
+            "MobileDevices": [
+                "MR08"
+            ]
+        },
+        {
+            "Time": "07:09:39",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:39",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR23"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:39",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR3"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:39",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:39",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 21,
+            "process_time": 0.17568209223156828,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR20"
+            ]
+        },
+        {
+            "Time": "07:09:49",
+            "Plane_ID": 4,
+            "Start_Site": 0,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.13437096247164249,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:57",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:09:57",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:10:57",
+            "Plane_ID": 5,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:14",
+            "Plane_ID": 2,
+            "Start_Site": 12,
+            "End_Site": 7,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.10540925533894598,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:14",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:14",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR15"
+            ]
+        },
+        {
+            "Time": "07:11:14",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR11"
+            ]
+        },
+        {
+            "Time": "07:11:14",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:14",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:14",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:21",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:21",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 8,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR18"
+            ],
+            "MobileDevices": [
+                "MR07"
+            ]
+        },
+        {
+            "Time": "07:11:21",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:21",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:21",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR2"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:21",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:11:21",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR19"
+            ]
+        },
+        {
+            "Time": "07:11:57",
+            "Plane_ID": 5,
+            "Start_Site": 0,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.08975274678557507,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:12:03",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:12:03",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:23",
+            "Plane_ID": 3,
+            "Start_Site": 27,
+            "End_Site": 18,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.17950549357115014,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:23",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:23",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR14"
+            ]
+        },
+        {
+            "Time": "07:13:23",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR10"
+            ]
+        },
+        {
+            "Time": "07:13:23",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR04"
+            ]
+        },
+        {
+            "Time": "07:13:23",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 7,
+            "process_time": 4.124225998749978,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:23",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 8,
+            "process_time": 2.3379312516832442,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR19"
+            ],
+            "MobileDevices": [
+                "MR09"
+            ]
+        },
+        {
+            "Time": "07:13:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR23"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR3"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:13:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 21,
+            "process_time": 0.3379312516832442,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR21"
+            ]
+        },
+        {
+            "Time": "07:15:14",
+            "Plane_ID": 4,
+            "Start_Site": 11,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.26874192494328497,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:15:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:15:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:15:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR24"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:15:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR4"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:15:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:15:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 21,
+            "process_time": 0.4166666666666856,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR22"
+            ]
+        },
+        {
+            "Time": "07:17:30",
+            "Plane_ID": 5,
+            "Start_Site": 12,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.04714045207910317,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:17:33",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:17:33",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:17:33",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:17:33",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR2"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:17:33",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:17:33",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 21,
+            "process_time": 0.2239516041194065,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR23"
+            ]
+        },
+        {
+            "Time": "07:25:39",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:25:39",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:27:21",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:27:21",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:29:33",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:29:33",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:31:31",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:31:31",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:33:33",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 8,
+            "process_time": 2.1756820922315683,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR20"
+            ],
+            "MobileDevices": [
+                "MR08"
+            ]
+        },
+        {
+            "Time": "07:33:33",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:33:33",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:45:39",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 8,
+            "process_time": 2.111111111111086,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR18"
+            ],
+            "MobileDevices": [
+                "MR07"
+            ]
+        },
+        {
+            "Time": "07:45:39",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:45:39",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:47:21",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:49:21",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:49:33",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:51:21",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:51:31",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:53:21",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:53:33",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:54:33",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:55:21",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:56:21",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:56:31",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:56:33",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:57:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:57:33",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:58:33",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "07:59:33",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:00:33",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:00:33",
+            "Plane_ID": 0,
+            "Start_Site": 1,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.5478634145365561,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:00:33",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR18"
+            ]
+        },
+        {
+            "Time": "08:01:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:02:31",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:02:33",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:03:33",
+            "Plane_ID": 1,
+            "Start_Site": 20,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.44876373392787533,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:03:33",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR20"
+            ]
+        },
+        {
+            "Time": "08:04:00",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:05:00",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:05:31",
+            "Plane_ID": 2,
+            "Start_Site": 7,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.38590122192916126,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:05:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR19"
+            ]
+        },
+        {
+            "Time": "08:05:54",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:08:00",
+            "Plane_ID": 3,
+            "Start_Site": 18,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.5393468844152112,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:08:00",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR21"
+            ]
+        },
+        {
+            "Time": "08:08:31",
+            "Plane_ID": 4,
+            "Start_Site": 27,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.334488738299786,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR22"
+            ]
+        },
+        {
+            "Time": "08:13:00",
+            "Plane_ID": 6,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:14:00",
+            "Plane_ID": 6,
+            "Start_Site": 0,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.25,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:14:00",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:14:00",
+            "Plane_ID": 7,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:14:15",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:14:15",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:00",
+            "Plane_ID": 7,
+            "Start_Site": 0,
+            "End_Site": 1,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.3004626062886658,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:00",
+            "Plane_ID": 8,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:15",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:18",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR28"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:18",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR8"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:18",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR16"
+            ],
+            "MobileDevices": [
+                "MR17"
+            ]
+        },
+        {
+            "Time": "08:15:18",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR12"
+            ],
+            "MobileDevices": [
+                "MR13"
+            ]
+        },
+        {
+            "Time": "08:15:18",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR24"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:18",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:18",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:15:18",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:16:00",
+            "Plane_ID": 8,
+            "Start_Site": 0,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.08975274678557507,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:16:00",
+            "Plane_ID": 9,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:16:05",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:16:05",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:16:18",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:00",
+            "Plane_ID": 9,
+            "Start_Site": 0,
+            "End_Site": 20,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.3004626062886658,
+            "FixedDevices": [
+                "FR25"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:00",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR5"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:00",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR13"
+            ],
+            "MobileDevices": [
+                "MR16"
+            ]
+        },
+        {
+            "Time": "08:17:00",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 5,
+            "process_time": 3.2777777777777715,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR9"
+            ],
+            "MobileDevices": [
+                "MR12"
+            ]
+        },
+        {
+            "Time": "08:17:00",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 6,
+            "process_time": 3.2777777777777715,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR21"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:00",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:00",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:18",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:18",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR14"
+            ]
+        },
+        {
+            "Time": "08:17:18",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR10"
+            ]
+        },
+        {
+            "Time": "08:17:18",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:18",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:18",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:17:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:18:18",
+            "Plane_ID": 10,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 6,
+            "Start_Site": 27,
+            "End_Site": 18,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.17950549357115014,
+            "FixedDevices": [
+                "FR27"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 10,
+            "Start_Site": 0,
+            "End_Site": 7,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.17716909687891083,
+            "FixedDevices": [
+                "FR7"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 0,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR15"
+            ],
+            "MobileDevices": [
+                "MR15"
+            ]
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 1,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR11"
+            ],
+            "MobileDevices": [
+                "MR11"
+            ]
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 2,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR23"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 3,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 4,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 5,
+            "Start_Site": 11,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.29528182813151804,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 5,
+            "process_time": 3.447903208238813,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 6,
+            "process_time": 3.447903208238813,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR23"
+            ]
+        },
+        {
+            "Time": "08:19:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:28",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:28",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:29",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:29",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 8,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR19"
+            ],
+            "MobileDevices": [
+                "MR09"
+            ]
+        },
+        {
+            "Time": "08:19:29",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:29",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR23"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:29",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR3"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:29",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:19:29",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 21,
+            "process_time": 0.539346884415238,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR18"
+            ]
+        },
+        {
+            "Time": "08:19:36",
+            "Plane_ID": 5,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:20:28",
+            "Plane_ID": 11,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:00",
+            "Plane_ID": 7,
+            "Start_Site": 1,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.32829526005987014,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:00",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:00",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR16"
+            ]
+        },
+        {
+            "Time": "08:21:00",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 5,
+            "process_time": 3.283278861866279,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR12"
+            ]
+        },
+        {
+            "Time": "08:21:00",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 6,
+            "process_time": 3.283278861866279,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:00",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:00",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:18",
+            "Plane_ID": 8,
+            "Start_Site": 12,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.04714045207910317,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:19",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:19",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 8,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR20"
+            ],
+            "MobileDevices": [
+                "MR08"
+            ]
+        },
+        {
+            "Time": "08:21:19",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:19",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR24"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:19",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR4"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:19",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:19",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 21,
+            "process_time": 0.33448873829979675,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR19"
+            ]
+        },
+        {
+            "Time": "08:21:21",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:21",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 8,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR18"
+            ],
+            "MobileDevices": [
+                "MR07"
+            ]
+        },
+        {
+            "Time": "08:21:21",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:21",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:21",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR2"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:21",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:21",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 21,
+            "process_time": 0.2239516041194065,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR24"
+            ]
+        },
+        {
+            "Time": "08:21:28",
+            "Plane_ID": 11,
+            "Start_Site": 0,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.08975274678557507,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:34",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:21:34",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 0,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 0,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 1,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 1,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 2,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 2,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 3,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 3,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 4,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:34",
+            "Plane_ID": 4,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:36",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:36",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:22:36",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR14"
+            ]
+        },
+        {
+            "Time": "08:22:36",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR10"
+            ]
+        },
+        {
+            "Time": "08:22:36",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR04"
+            ]
+        },
+        {
+            "Time": "08:22:36",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:18",
+            "Plane_ID": 9,
+            "Start_Site": 20,
+            "End_Site": 1,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.26874192494328497,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:18",
+            "Plane_ID": 5,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:18",
+            "Plane_ID": 5,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:34",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:34",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 8,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR17"
+            ],
+            "MobileDevices": [
+                "MR06"
+            ]
+        },
+        {
+            "Time": "08:23:34",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:34",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR21"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:34",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR1"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:34",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:23:34",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 21,
+            "process_time": 0.5007710104811167,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR25"
+            ]
+        },
+        {
+            "Time": "08:25:00",
+            "Plane_ID": 10,
+            "Start_Site": 7,
+            "End_Site": 20,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.32829526005987014,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:25:19",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:25:19",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:25:19",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR23"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:25:19",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR3"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:25:19",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:25:19",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 21,
+            "process_time": 0.4487637339278763,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR20"
+            ]
+        },
+        {
+            "Time": "08:26:36",
+            "Plane_ID": 11,
+            "Start_Site": 12,
+            "End_Site": 7,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.10540925533894598,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:26:42",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:26:42",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:26:42",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:26:42",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR2"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:26:42",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:26:42",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 21,
+            "process_time": 0.2952818281315217,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR26"
+            ]
+        },
+        {
+            "Time": "08:37:19",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:37:19",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:37:21",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:37:21",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:39:34",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:39:34",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:41:19",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:41:19",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:42:42",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 8,
+            "process_time": 2.1242259987500347,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR19"
+            ],
+            "MobileDevices": [
+                "MR09"
+            ]
+        },
+        {
+            "Time": "08:42:42",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:42:42",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:57:19",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 8,
+            "process_time": 2.111111111111086,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR18"
+            ],
+            "MobileDevices": [
+                "MR07"
+            ]
+        },
+        {
+            "Time": "08:57:19",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:57:19",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:57:21",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:59:21",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "08:59:34",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:01:19",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:01:21",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:02:42",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:03:19",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:03:21",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:04:34",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:05:19",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:06:19",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:07:42",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:08:21",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:08:42",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:09:21",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:09:34",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:09:42",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:10:34",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:10:42",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:11:19",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:11:34",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:12:19",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:12:21",
+            "Plane_ID": 6,
+            "Start_Site": 18,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.5393468844152112,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:12:21",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR18"
+            ]
+        },
+        {
+            "Time": "09:12:53",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:13:42",
+            "Plane_ID": 7,
+            "Start_Site": 27,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.334488738299786,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR19"
+            ]
+        },
+        {
+            "Time": "09:14:02",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:15:19",
+            "Plane_ID": 8,
+            "Start_Site": 11,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.29528182813151804,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR24"
+            ]
+        },
+        {
+            "Time": "09:15:21",
+            "Plane_ID": 9,
+            "Start_Site": 1,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.5478634145365561,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR25"
+            ]
+        },
+        {
+            "Time": "09:17:02",
+            "Plane_ID": 10,
+            "Start_Site": 20,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.44876373392787533,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR20"
+            ]
+        },
+        {
+            "Time": "09:17:29",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:19:35",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:24:35",
+            "Plane_ID": 12,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:25:35",
+            "Plane_ID": 12,
+            "Start_Site": 0,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.25,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:25:35",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:25:35",
+            "Plane_ID": 13,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:25:50",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:25:50",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:26:35",
+            "Plane_ID": 13,
+            "Start_Site": 0,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.08975274678557507,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:26:35",
+            "Plane_ID": 14,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:26:40",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:26:40",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:26:40",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:35",
+            "Plane_ID": 14,
+            "Start_Site": 0,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.13437096247164249,
+            "FixedDevices": [
+                "FR28"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:35",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR8"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:35",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR16"
+            ],
+            "MobileDevices": [
+                "MR17"
+            ]
+        },
+        {
+            "Time": "09:27:35",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR12"
+            ],
+            "MobileDevices": [
+                "MR13"
+            ]
+        },
+        {
+            "Time": "09:27:35",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR24"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:35",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:35",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:35",
+            "Plane_ID": 15,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR14"
+            ]
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR10"
+            ]
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:27:43",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:28:35",
+            "Plane_ID": 15,
+            "Start_Site": 0,
+            "End_Site": 1,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.3004626062886658,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:28:35",
+            "Plane_ID": 16,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:28:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:28:53",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:28:53",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR16"
+            ]
+        },
+        {
+            "Time": "09:28:53",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 5,
+            "process_time": 3.111111111111086,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR12"
+            ]
+        },
+        {
+            "Time": "09:28:53",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 6,
+            "process_time": 3.111111111111086,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:28:53",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:28:53",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:28:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:29:35",
+            "Plane_ID": 16,
+            "Start_Site": 0,
+            "End_Site": 20,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.3004626062886658,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:29:53",
+            "Plane_ID": 16,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR25"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:29:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR5"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:29:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR13"
+            ],
+            "MobileDevices": [
+                "MR15"
+            ]
+        },
+        {
+            "Time": "09:29:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 5,
+            "process_time": 3.447903208238813,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR9"
+            ],
+            "MobileDevices": [
+                "MR11"
+            ]
+        },
+        {
+            "Time": "09:29:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 6,
+            "process_time": 3.447903208238813,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR21"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:29:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:29:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:29:53",
+            "Plane_ID": 16,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:30:43",
+            "Plane_ID": 6,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:30:43",
+            "Plane_ID": 7,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:30:43",
+            "Plane_ID": 8,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:30:43",
+            "Plane_ID": 9,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:30:43",
+            "Plane_ID": 10,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:30:43",
+            "Plane_ID": 11,
+            "Start_Site": 7,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.38590122192916126,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:30:43",
+            "Plane_ID": 17,
+            "Start_Site": 0,
+            "End_Site": 0,
+            "Job_ID": 0,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR26"
+            ]
+        },
+        {
+            "Time": "09:31:06",
+            "Plane_ID": 11,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:06",
+            "Plane_ID": 16,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR27"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:06",
+            "Plane_ID": 16,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR7"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:06",
+            "Plane_ID": 16,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR23"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:06",
+            "Plane_ID": 16,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:35",
+            "Plane_ID": 12,
+            "Start_Site": 27,
+            "End_Site": 7,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.334995854037363,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:43",
+            "Plane_ID": 13,
+            "Start_Site": 12,
+            "End_Site": 18,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.28674417556808757,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:43",
+            "Plane_ID": 17,
+            "Start_Site": 0,
+            "End_Site": 16,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.3236081306491267,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 13,
+            "Start_Site": 18,
+            "End_Site": 27,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.24267032964268395,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 17,
+            "Start_Site": 16,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.08975274678557507,
+            "FixedDevices": [
+                "FR18"
+            ],
+            "MobileDevices": [
+                "MR07"
+            ]
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 8,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR2"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR27"
+            ]
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:31:55",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 21,
+            "process_time": 0.29528182813146486,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:32:00",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:32:00",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:32:09",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:32:09",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 8,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR20"
+            ],
+            "MobileDevices": [
+                "MR08"
+            ]
+        },
+        {
+            "Time": "09:32:09",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:32:09",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR24"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:32:09",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR4"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:32:09",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:32:09",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 21,
+            "process_time": 0.33448873829979675,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR18"
+            ]
+        },
+        {
+            "Time": "09:32:53",
+            "Plane_ID": 14,
+            "Start_Site": 11,
+            "End_Site": 18,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.282842712474619,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 8,
+            "process_time": 2.1242259987500347,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR19"
+            ],
+            "MobileDevices": [
+                "MR09"
+            ]
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR23"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR3"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 21,
+            "process_time": 0.5393468844151812,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR19"
+            ]
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 3,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR26"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 4,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR6"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR14"
+            ],
+            "MobileDevices": [
+                "MR14"
+            ]
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR10"
+            ],
+            "MobileDevices": [
+                "MR10"
+            ]
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 7,
+            "process_time": 4.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR22"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:10",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 12,
+            "Job_ID": 20,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 15,
+            "Start_Site": 1,
+            "End_Site": 11,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.1699673171197595,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 6,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 6,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 7,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 7,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 8,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 8,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 9,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 9,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 10,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:33:53",
+            "Plane_ID": 10,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:34:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:34:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 8,
+            "process_time": 2.283278861866279,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR18"
+            ],
+            "MobileDevices": [
+                "MR06"
+            ]
+        },
+        {
+            "Time": "09:34:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:34:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 10,
+            "process_time": 2.0785674201318898,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR04"
+            ]
+        },
+        {
+            "Time": "09:34:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR2"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:34:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:34:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 21,
+            "process_time": 0.29528182813146486,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR20"
+            ]
+        },
+        {
+            "Time": "09:35:06",
+            "Plane_ID": 16,
+            "Start_Site": 20,
+            "End_Site": 1,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.26874192494328497,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:35:06",
+            "Plane_ID": 11,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:35:06",
+            "Plane_ID": 11,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:35:22",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:35:22",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:35:22",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR21"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:35:22",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR1"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:35:22",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:35:22",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 21,
+            "process_time": 0.5478634145365504,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR21"
+            ]
+        },
+        {
+            "Time": "09:37:10",
+            "Plane_ID": 17,
+            "Start_Site": 12,
+            "End_Site": 20,
+            "Job_ID": 1,
+            "process_time": 0.0,
+            "move_time": 0.2603416558635551,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:37:25",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 2,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:37:25",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 9,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:37:25",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 10,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR23"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:37:25",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 11,
+            "process_time": 16.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR3"
+            ],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:37:25",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 14,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:37:25",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 21,
+            "process_time": 0.4487637339278763,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR22"
+            ]
+        },
+        {
+            "Time": "09:48:09",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:48:09",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:49:10",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:49:10",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:50:03",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:50:03",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:51:22",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:51:22",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:53:25",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 5,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR13"
+            ],
+            "MobileDevices": [
+                "MR15"
+            ]
+        },
+        {
+            "Time": "09:53:25",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 6,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR9"
+            ],
+            "MobileDevices": [
+                "MR11"
+            ]
+        },
+        {
+            "Time": "09:53:25",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 8,
+            "process_time": 2.283278861866279,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR17"
+            ],
+            "MobileDevices": [
+                "MR06"
+            ]
+        },
+        {
+            "Time": "09:53:25",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "09:53:25",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:08:09",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 8,
+            "process_time": 2.1242259987500347,
+            "move_time": 0.0,
+            "FixedDevices": [
+                "FR19"
+            ],
+            "MobileDevices": [
+                "MR09"
+            ]
+        },
+        {
+            "Time": "10:08:09",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 12,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:08:09",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 13,
+            "process_time": 20.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:09:10",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:10:03",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:11:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:11:22",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:12:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:13:10",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:13:25",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:14:03",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:16:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:16:22",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:18:10",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:18:25",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:19:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:19:25",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:20:10",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:20:25",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:21:03",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 7,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:21:10",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:21:22",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 27,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:21:25",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:22:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 18,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:22:25",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:23:25",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:24:03",
+            "Plane_ID": 12,
+            "Start_Site": 7,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.38590122192916126,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:24:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 11,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR27"
+            ]
+        },
+        {
+            "Time": "10:24:22",
+            "Plane_ID": 13,
+            "Start_Site": 27,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.334488738299786,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR18"
+            ]
+        },
+        {
+            "Time": "10:24:26",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 1,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:25:10",
+            "Plane_ID": 14,
+            "Start_Site": 18,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.5393468844152112,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR19"
+            ]
+        },
+        {
+            "Time": "10:27:03",
+            "Plane_ID": 15,
+            "Start_Site": 11,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.29528182813151804,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR20"
+            ]
+        },
+        {
+            "Time": "10:27:26",
+            "Plane_ID": 16,
+            "Start_Site": 1,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.5478634145365561,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR21"
+            ]
+        },
+        {
+            "Time": "10:28:15",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 15,
+            "process_time": 2.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:30:21",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 16,
+            "process_time": 5.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:35:27",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 17,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:36:33",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 18,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:37:39",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 20,
+            "Job_ID": 19,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:40:39",
+            "Plane_ID": 12,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:40:39",
+            "Plane_ID": 13,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:40:39",
+            "Plane_ID": 14,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:40:39",
+            "Plane_ID": 15,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:40:39",
+            "Plane_ID": 16,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:40:39",
+            "Plane_ID": 17,
+            "Start_Site": 20,
+            "End_Site": 29,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.5007710104811096,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR22"
+            ]
+        },
+        {
+            "Time": "10:41:10",
+            "Plane_ID": 17,
+            "Start_Site": 29,
+            "End_Site": 29,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 12,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 12,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 13,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 13,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 14,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 14,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 15,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 15,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 16,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 16,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:10",
+            "Plane_ID": 17,
+            "Start_Site": 29,
+            "End_Site": 31,
+            "Job_ID": 21,
+            "process_time": 0.0,
+            "move_time": 0.1111111111111111,
+            "FixedDevices": [],
+            "MobileDevices": [
+                "MR22"
+            ]
+        },
+        {
+            "Time": "10:44:16",
+            "Plane_ID": 17,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 22,
+            "process_time": 3.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        },
+        {
+            "Time": "10:44:16",
+            "Plane_ID": 17,
+            "Start_Site": 31,
+            "End_Site": 31,
+            "Job_ID": 23,
+            "process_time": 1.0,
+            "move_time": 0.0,
+            "FixedDevices": [],
+            "MobileDevices": []
+        }
+    ],
+    "selected_group_index": 0,
+    "criterion": "min_makespan=647.28",
+    "runway_usage": [
+        {
+            "Time": "08:00:33",
+            "time_minutes": 480.5638764560427,
+            "Plane_ID": 0,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 1,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.5478634145365561
+        },
+        {
+            "Time": "08:03:33",
+            "time_minutes": 483.5557374133006,
+            "Plane_ID": 1,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 20,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.44876373392787533
+        },
+        {
+            "Time": "08:05:31",
+            "time_minutes": 485.5187419249432,
+            "Plane_ID": 2,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 7,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.38590122192916126
+        },
+        {
+            "Time": "08:08:00",
+            "time_minutes": 488.0045011472285,
+            "Plane_ID": 3,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 18,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.5393468844152112
+        },
+        {
+            "Time": "08:08:31",
+            "time_minutes": 488.5187419249432,
+            "Plane_ID": 4,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 27,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.334488738299786
+        },
+        {
+            "Time": "08:19:18",
+            "time_minutes": 499.30496375351714,
+            "Plane_ID": 0,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:19:18",
+            "time_minutes": 499.30496375351714,
+            "Plane_ID": 1,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:19:18",
+            "time_minutes": 499.30496375351714,
+            "Plane_ID": 2,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:19:18",
+            "time_minutes": 499.30496375351714,
+            "Plane_ID": 3,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:19:18",
+            "time_minutes": 499.30496375351714,
+            "Plane_ID": 4,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:19:18",
+            "time_minutes": 499.30496375351714,
+            "Plane_ID": 5,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 11,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.29528182813151804
+        },
+        {
+            "Time": "08:19:36",
+            "time_minutes": 499.60024558164866,
+            "Plane_ID": 5,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 0,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 0,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 1,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 1,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 2,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 2,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 3,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 3,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 4,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:22:34",
+            "time_minutes": 502.5718855971817,
+            "Plane_ID": 4,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:23:18",
+            "time_minutes": 503.3049637535172,
+            "Plane_ID": 5,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "08:23:18",
+            "time_minutes": 503.3049637535172,
+            "Plane_ID": 5,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:12:21",
+            "time_minutes": 552.3521042055962,
+            "Plane_ID": 6,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 18,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.5393468844152112
+        },
+        {
+            "Time": "09:13:42",
+            "time_minutes": 553.7056548369876,
+            "Plane_ID": 7,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 27,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.334488738299786
+        },
+        {
+            "Time": "09:15:19",
+            "time_minutes": 555.3327964072884,
+            "Plane_ID": 8,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 11,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.29528182813151804
+        },
+        {
+            "Time": "09:15:21",
+            "time_minutes": 555.3521042055962,
+            "Plane_ID": 9,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 1,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.5478634145365561
+        },
+        {
+            "Time": "09:17:02",
+            "time_minutes": 557.0401435752874,
+            "Plane_ID": 10,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 20,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.44876373392787533
+        },
+        {
+            "Time": "09:30:43",
+            "time_minutes": 570.723278271687,
+            "Plane_ID": 6,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:30:43",
+            "time_minutes": 570.723278271687,
+            "Plane_ID": 7,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:30:43",
+            "time_minutes": 570.723278271687,
+            "Plane_ID": 8,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:30:43",
+            "time_minutes": 570.723278271687,
+            "Plane_ID": 9,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:30:43",
+            "time_minutes": 570.723278271687,
+            "Plane_ID": 10,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:30:43",
+            "time_minutes": 570.723278271687,
+            "Plane_ID": 11,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 7,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.38590122192916126
+        },
+        {
+            "Time": "09:31:06",
+            "time_minutes": 571.1091794936162,
+            "Plane_ID": 11,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 6,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 6,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 7,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 7,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 8,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 8,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 9,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 9,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 10,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:33:53",
+            "time_minutes": 573.8893699155041,
+            "Plane_ID": 10,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:35:06",
+            "time_minutes": 575.1091794936162,
+            "Plane_ID": 11,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "09:35:06",
+            "time_minutes": 575.1091794936162,
+            "Plane_ID": 11,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:24:03",
+            "time_minutes": 624.0593372326242,
+            "Plane_ID": 12,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 7,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.38590122192916126
+        },
+        {
+            "Time": "10:24:22",
+            "time_minutes": 624.3779214185599,
+            "Plane_ID": 13,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 27,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.334488738299786
+        },
+        {
+            "Time": "10:25:10",
+            "time_minutes": 625.1722126279791,
+            "Plane_ID": 14,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 18,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.5393468844152112
+        },
+        {
+            "Time": "10:27:03",
+            "time_minutes": 627.0593372326242,
+            "Plane_ID": 15,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 11,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.29528182813151804
+        },
+        {
+            "Time": "10:27:26",
+            "time_minutes": 627.4452384545533,
+            "Plane_ID": 16,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 1,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.5478634145365561
+        },
+        {
+            "Time": "10:40:39",
+            "time_minutes": 640.6665734928958,
+            "Plane_ID": 12,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:40:39",
+            "time_minutes": 640.6665734928958,
+            "Plane_ID": 13,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:40:39",
+            "time_minutes": 640.6665734928958,
+            "Plane_ID": 14,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:40:39",
+            "time_minutes": 640.6665734928958,
+            "Plane_ID": 15,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:40:39",
+            "time_minutes": 640.6665734928958,
+            "Plane_ID": 16,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:40:39",
+            "time_minutes": 640.6665734928958,
+            "Plane_ID": 17,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 20,
+            "End_Site": 29,
+            "process_time": 0.0,
+            "move_time": 0.5007710104811096
+        },
+        {
+            "Time": "10:41:10",
+            "time_minutes": 641.167344503377,
+            "Plane_ID": 17,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 29,
+            "End_Site": 29,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 12,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 12,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 13,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 13,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 14,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 14,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 15,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 15,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 16,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 16,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:10",
+            "time_minutes": 644.167344503377,
+            "Plane_ID": 17,
+            "Job_ID": 21,
+            "Job_Code": "ZY_T",
+            "Start_Site": 29,
+            "End_Site": 31,
+            "process_time": 0.0,
+            "move_time": 0.1111111111111111
+        },
+        {
+            "Time": "10:44:16",
+            "time_minutes": 644.278455614488,
+            "Plane_ID": 17,
+            "Job_ID": 22,
+            "Job_Code": "ZY_S",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 3.0,
+            "move_time": 0.0
+        },
+        {
+            "Time": "10:44:16",
+            "time_minutes": 644.278455614488,
+            "Plane_ID": 17,
+            "Job_ID": 23,
+            "Job_Code": "ZY_F",
+            "Start_Site": 31,
+            "End_Site": 31,
+            "process_time": 1.0,
+            "move_time": 0.0
+        }
+    ]
+}

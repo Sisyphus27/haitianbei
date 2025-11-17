@@ -120,7 +120,7 @@ def get_mixer_args(args):
     _setdefault('train_steps', 2)
     _setdefault('evaluate_cycle', 5)
     _setdefault('batch_size', 32)
-    _setdefault('buffer_size', 1000)
+    _setdefault('buffer_size', 100)
     _setdefault('save_cycle', 50)
     _setdefault('target_update_cycle', 200)
 
