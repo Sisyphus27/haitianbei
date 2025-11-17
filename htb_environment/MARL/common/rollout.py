@@ -113,7 +113,7 @@ class RolloutWorker:
         # 统计移动时间（每架飞机的平均移动分钟）
         epi_sit = last_info.get("episodes_situation", [])
         move_time = sum(job_trans[5]
-                        for job_trans in epi_sit) / max(1, self.n_agents)
+                        for job_trans in epi_sit) 
 
         # last obs
         # 注意：此处按原代码逻辑，把末尾的 obs/state 再补一帧
@@ -268,7 +268,7 @@ class CommRolloutWorker:
 
         epi_sit = last_info.get("episodes_situation", [])
         move_time = sum(job_trans[5]
-                        for job_trans in epi_sit) / max(1, self.n_agents)
+                        for job_trans in epi_sit) 
 
         # last obs
         obs = self.env.get_obs()
