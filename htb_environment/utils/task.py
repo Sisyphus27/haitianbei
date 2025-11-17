@@ -15,16 +15,19 @@ class TaskGraph:
             j.code: set(j.mutex) for j in jobs.jobs_object_list}
         self.any_pre: Dict[str, Set[str]] = {j.code: set(
             getattr(j, "any_pre", [])) for j in jobs.jobs_object_list}
-        
+
+    # LOG：依赖关系实现逻辑
     def _deps_satisfied(self, code: str, finished: Set[str]) -> bool:
-        # 所有 pre 都完成，且（若定义了 any_pre）任一 any_pre 完成
+        # 所有 pre 都完成，且任一 any_pre 完成
         if not self.pre.get(code, set()).issubset(finished):
             return False
         anyset = self.any_pre.get(code, set())
         return True if not anyset else anyset.intersection(finished)
 
+    # LOG：依赖关系实现逻辑
+    # LOG：互斥关系实现逻辑
     def enabled(self, finished: Set[str], ongoing_mutex: Set[str]) -> List[Job]:
-        """返回所有“入度为0且不触发互斥”的就绪作业"""
+        """返回所有"入度为0且不触发互斥"的就绪作业"""
         cand: List[Job] = []
         for j in self.jobs.jobs_object_list:
             c = j.code
@@ -38,11 +41,11 @@ class TaskGraph:
             if self._deps_satisfied(c, finished):
                 cand.append(j)
         return cand
-    
+
+    # LOG：互斥关系实现逻辑
     def pack_parallel(self, ready: List[Job], site_job_ids: Set[int]) -> List[Job]:
         """
-        从就绪集里按“贪心”挑一组两两不互斥、且该站位能做的作业（并行执行）。
-        NOTE：这里不做复杂最大团搜索，先用贪心即可。
+        从就绪集里按"贪心"挑一组两两不互斥、且该站位能做的作业（并行执行）。
         """
         pack: List[Job] = []
         used_mutex: Set[str] = set()
@@ -65,6 +68,3 @@ class Task:
     def __init__(self):
         self.jobs = Jobs()
         self.graph = TaskGraph(self.jobs)
-
-
-

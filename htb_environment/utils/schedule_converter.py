@@ -5,8 +5,16 @@ import os
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 import matplotlib.pyplot as plt
+from utils.job import Jobs
 
 # --------- 公共工具 ---------
+
+try:
+    _JOB_ID_TO_CODE = {
+        job.index_id: job.code for job in Jobs().jobs_object_list
+    }
+except Exception:
+    _JOB_ID_TO_CODE = {}
 
 
 def _minutes_to_time_str(minutes: float) -> str:
@@ -136,6 +144,7 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
     # per-plane 上一次 End_Site
     last_end: Dict[int, int] = {}
     plan: List[Dict[str, Any]] = []
+    runway_usage: List[Dict[str, Any]] = []
     for t, jid, end_site, pid, pmin, mmin in episodes_sorted:
         start_site = last_end.get(int(pid), int(end_site))
         row = dict(
@@ -150,6 +159,20 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
         )
         plan.append(row)
         last_end[int(pid)] = int(end_site)
+        end_site_int = int(end_site)
+        if end_site_int in (29, 30, 31):
+            entry = dict(
+                Time=row["Time"],
+                time_minutes=row["_time_minutes"],
+                Plane_ID=row["Plane_ID"],
+                Job_ID=row["Job_ID"],
+                Job_Code=_JOB_ID_TO_CODE.get(row["Job_ID"]),
+                Start_Site=row["Start_Site"],
+                End_Site=row["End_Site"],
+                process_time=row["process_time"],
+                move_time=row["move_time"],
+            )
+            runway_usage.append(entry)
 
     # 注入设备信息（若 info.json 提供）
     _attach_devices_to_plan(plan, episodes_sorted, devices)
@@ -161,9 +184,14 @@ def convert_schedule_with_fixed_logic(info_json_path: str,
         row_copy.pop('_time_minutes', None)  # 移除内部字段
         plan_for_json.append(row_copy)
 
+    output_payload = {
+        "plan": plan_for_json,
+        "selected_group_index": best_idx,
+        "criterion": criterion,
+        "runway_usage": runway_usage,
+    }
     with open(plan_json_path, "w", encoding="utf-8") as f:
-        json.dump({"plan": plan_for_json, "selected_group_index": best_idx, "criterion": criterion},
-                  f, ensure_ascii=False, indent=4)
+        json.dump(output_payload, f, ensure_ascii=False, indent=4)
 
     # 4) 绘图（使用原始 plan，包含 _time_minutes）
     if also_plot:
@@ -246,10 +274,21 @@ def _plot_gantt(plan: List[Dict[str, Any]], png_path: str):
     move_line = mlines.Line2D([], [], color='#888',
                               linewidth=1.2, label='Move (travel)')
     legend_handles.append(move_line)
-    ax.legend(handles=legend_handles, loc='upper right',
-              bbox_to_anchor=(1.02, 1.0))
+    if legend_handles:
+        ncol = max(1, len(legend_handles))
+        ax.legend(
+            handles=legend_handles,
+            loc='upper center',
+            bbox_to_anchor=(0.5, -0.15),
+            ncol=ncol,
+            frameon=True,
+            framealpha=0.95,
+        )
+        bottom_margin = 0.22
+    else:
+        bottom_margin = 0.08
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, bottom_margin, 1, 1])
     plt.savefig(png_path, dpi=160)
     plt.close(fig)
 
@@ -318,62 +357,111 @@ def _plot_makespan_progress(info: dict, out_dir: str):
 
 
 def _plot_stand_usage(plan: List[Dict[str, Any]], png_path: str, batch_size_per_batch: Optional[int] = None):
-    """绘制停机位使用情况甘特图：按停机位分行显示占用时段（仅展示 End_Site 为停机位的加工段）。
-    使用每个飞机一种颜色，并在图例中标注 Plane / Batch 信息（若提供 batch_size_per_batch）。
-    图例放在图表下方并分多行显示，不遮盖甘特图。"""
+    """
+    绘制停机位使用情况甘特图：按停机位分行显示占用时段（仅展示 End_Site 为停机位的加工段）。
+
+    需求：
+    - 颜色只按“基础飞机编号”区分：若设置 batch_size_per_batch=N，则使用 N 种颜色，
+      每架飞机的颜色由 (Plane_ID % N) 决定。
+      例如 N=12 时，plane0 与 plane12 使用相同颜色。
+    - 图例中只展示基础飞机编号 0 ~ (N-1) 与颜色的对应关系，不展示所有全局 plane_id。
+    - 纵轴固定显示所有停机位 0~31（包含 0、29、30、31），即使某些停机位未被使用也显示出来。
+    - 横轴适当拉长（figsize 宽度增大）。
+
+    Args:
+        plan: 由 plan.json 生成的调度序列（内部包含 _time_minutes 字段）。
+        png_path: 输出图片路径。
+        batch_size_per_batch: 每批次飞机数量，用于确定基础飞机编号数量；
+                              若为 12，则图例只展示 Plane 0~11，颜色按 plane_id % 12 复用。
+    """
     if not plan:
         return
     _ensure_dir(png_path)
-    # 聚合到每个停机位
+
+    # -------------------------
+    # 1. 聚合到每个停机位（仅统计 0~31 号站位）
+    # -------------------------
+    STAND_MIN_ID = 0
+    STAND_MAX_ID = 31
     by_stand: Dict[int, List[Dict[str, Any]]] = {}
+
     for row in plan:
         sid = int(row.get("End_Site", -1))
-        # 仅考虑站位（假定站位 id <= 28 且 >0）
-        if sid <= 0:
+        # 只关注 0~31 号站位；其他 site_id 在本图中忽略
+        if sid < STAND_MIN_ID or sid > STAND_MAX_ID:
             continue
         by_stand.setdefault(sid, []).append(row)
+
+    # 每个停机位内按时间排序
     for lst in by_stand.values():
         lst.sort(key=lambda r: r.get("_time_minutes", r.get("Time", 0)))
 
-    # 颜色分配：按 Plane_ID 分配 distinct colors
-    plane_ids = sorted(set(r["Plane_ID"] for r in plan))
-    cmap = plt.get_cmap('tab20')
-    colors = {pid: cmap(i % cmap.N) for i, pid in enumerate(plane_ids)}
+    # -------------------------
+    # 2. 确定基础飞机编号数量 & 颜色映射
+    # -------------------------
+    # 所有出现的全局 plane_id（可能很多批次）
+    plane_ids_all = sorted(set(int(r["Plane_ID"]) for r in plan))
 
-    # 计算合适的图例列数和行数（根据飞机数量动态调整）
-    n_planes = len(plane_ids)
-    if n_planes <= 10:
-        ncol = 5
-    elif n_planes <= 20:
-        ncol = 5
+    # 基础飞机编号数量：优先使用 batch_size_per_batch；否则根据数据推一个上限
+    if batch_size_per_batch is not None and batch_size_per_batch > 0:
+        base_plane_num = int(batch_size_per_batch)
     else:
-        ncol = 6
+        # 未显式给出时：若总飞机数 <= 12，则用实际数量；否则固定用 12 种颜色
+        base_plane_num = len(plane_ids_all) if plane_ids_all else 1
+        if base_plane_num > 12:
+            base_plane_num = 12
 
-    # 计算图例需要的行数
-    legend_rows = (n_planes + ncol - 1) // ncol
+    # 基础飞机编号：0 ~ base_plane_num-1
+    base_plane_ids = list(range(base_plane_num))
 
-    # 根据停机位数和图例大小动态调整图表高度
-    # 每个停机位占 0.4，图例每行占 0.25
-    gantt_height = max(4, len(by_stand) * 0.4)
-    legend_height = legend_rows * 0.25 + 0.5  # 加 0.5 的上下边距
+    # 调色盘：对基础飞机编号分配颜色
+    cmap = plt.get_cmap('tab20')
+    base_colors = {pid: cmap(i % cmap.N)
+                   for i, pid in enumerate(base_plane_ids)}
+
+    # 图例中的“飞机数”就是基础编号数（而不是全局 plane_id 数量）
+    n_planes_for_legend = base_plane_num
+
+    # --- 修改点 开始 ---
+    # 原有的多行计算逻辑 (if/elif/else) 被替换
+    # 强制图例为单排显示：
+    ncol = n_planes_for_legend  # 列数 = 图例项总数
+    legend_rows = 1             # 行数 = 1
+    # --- 修改点 结束 ---
+
+    # -------------------------
+    # 3. 图尺寸：纵轴按 0~31 号站位，横轴拉长
+    # -------------------------
+    stand_ids = list(range(STAND_MIN_ID, STAND_MAX_ID + 1))
+    # 每个停机位占 0.4，高度 = 停机位数 * 0.4；图例按行数增加高度
+    gantt_height = max(4, len(stand_ids) * 0.4)
+    legend_height = legend_rows * 0.25 + 0.5  # 图例区高度
     total_height = gantt_height + legend_height
 
-    fig = plt.figure(figsize=(14, total_height))
+    # 横向拉长：宽度 18（比默认 12/14 更长）
+    fig = plt.figure(figsize=(18, total_height))
     ax = plt.gca()
+
+    # -------------------------
+    # 4. 绘制每个停机位的甘特条
+    # -------------------------
     yticks, ylabels = [], []
     y = 0
-    for sid in sorted(by_stand.keys()):
-        seq = by_stand[sid]
+    for sid in stand_ids:
+        seq = by_stand.get(sid, [])
         for r in seq:
-            # 使用 _time_minutes 作为绘图时间
             t0 = r.get("_time_minutes", None)
             if t0 is None:
                 continue
-            # 停机位上的加工段
-            if r["process_time"] > 0:
+            if r.get("process_time", 0) > 0:
                 pid = int(r["Plane_ID"])
-                ax.broken_barh([(t0, r["process_time"])],
-                               (y-0.2, 0.4), facecolors=colors[pid])
+                # 颜色只由“基础飞机编号”决定：plane_id % base_plane_num
+                base_pid = pid % base_plane_num
+                ax.broken_barh(
+                    [(t0, r["process_time"])],
+                    (y - 0.2, 0.4),
+                    facecolors=base_colors.get(base_pid, "#999999"),
+                )
         yticks.append(y)
         ylabels.append(f"Stand {sid}")
         y += 1
@@ -384,100 +472,35 @@ def _plot_stand_usage(plan: List[Dict[str, Any]], png_path: str, batch_size_per_
     ax.set_title("Stand Usage Gantt")
     ax.grid(True, axis='x', linestyle='--', alpha=0.3)
 
-    # 构造图例：每个 Plane 对应一个颜色，若提供 batch_size_per_batch，标注批次
+    # -------------------------
+    # 5. 图例：只展示基础飞机编号 0~(base_plane_num-1)
+    # -------------------------
     import matplotlib.patches as mpatches
     legend_handles = []
-    for pid in plane_ids:
-        batch_label = ''
-        if batch_size_per_batch and batch_size_per_batch > 0:
-            batch_idx = int(pid) // int(batch_size_per_batch)
-            batch_label = f" (Batch {batch_idx})"
-        lbl = f"Plane {pid}{batch_label}"
-        patch = mpatches.Patch(color=colors[pid], label=lbl)
+    for pid in base_plane_ids:
+        lbl = f"Plane {pid}"  # 只展示 0~(base_plane_num-1)
+        patch = mpatches.Patch(color=base_colors[pid], label=lbl)
         legend_handles.append(patch)
 
-    # 将图例放在图表下方，不遮盖甘特图
-    # loc='upper center' + bbox_to_anchor=(0.5, -0.1) 将图例放在轴下方
-    ax.legend(handles=legend_handles, loc='upper center',
-              bbox_to_anchor=(0.5, -0.05 - 0.04 * legend_rows),
-              ncol=ncol, frameon=True, framealpha=0.95)
+    # 图例放在下方，不遮住甘特图
+    # (注意：bbox_to_anchor 的 Y 值计算依赖于 legend_rows，
+    # 因为 legend_rows 现固定为 1，Y 值也会固定)
+    ax.legend(
+        handles=legend_handles,
+        loc='upper center',
+        bbox_to_anchor=(0.5, -0.05 - 0.04 * legend_rows),
+        ncol=ncol,
+        frameon=True,
+        framealpha=0.95,
+    )
 
-    # 使用 subplots_adjust 为图例预留空间
+    # 为图例预留空间
+    # (注意：bottom 的计算也依赖于 legend_rows，
+    # 因为 legend_rows 现固定为 1，bottom 值也会固定)
     plt.subplots_adjust(bottom=0.1 + 0.04 * legend_rows)
 
     plt.savefig(png_path, dpi=160, bbox_inches='tight')
     plt.close(fig)
 
 
-def _plot_metrics(info: Dict[str, Any], out_dir: str, best_idx: int):
-    _ensure_dir(os.path.join(out_dir, "dummy"))
-    # 1) 训练奖励（每 episode）
-    train_r = info.get("train_reward", [])
-    if train_r:
-        fig = plt.figure(figsize=(10, 4))
-        ax = plt.gca()
-        ax.plot(train_r, label="train_reward", linewidth=1.0)
-        ax.plot(_moving_avg(train_r, 50),
-                label="moving_avg(50)", linewidth=1.5)
-        ax.set_title("Training Reward per Episode")
-        ax.set_xlabel("Episode")
-        ax.set_ylabel("Reward")
-        ax.legend()
-        plt.tight_layout()
-        plt.savefig(os.path.join(out_dir, "train_reward.png"), dpi=160)
-        plt.close(fig)
 
-    # 2) 损失（每次优化步）
-    loss = info.get("loss", [])
-    if loss:
-        fig = plt.figure(figsize=(10, 4))
-        ax = plt.gca()
-        ax.plot(loss, label="loss", linewidth=1.0)
-        ax.set_title("Training Loss")
-        ax.set_xlabel("Update Step")
-        ax.set_ylabel("Loss")
-        ax.legend()
-        plt.tight_layout()
-        plt.savefig(os.path.join(out_dir, "loss.png"), dpi=160)
-        plt.close(fig)
-
-    # 3) 评估工期（每次 evaluate）
-    eval_ms = info.get("evaluate_makespan", []) or info.get(
-        "average_makespan", [])
-    if eval_ms:
-        fig = plt.figure(figsize=(10, 4))
-        ax = plt.gca()
-        ax.plot(eval_ms, label="evaluate_makespan", linewidth=1.0)
-        ax.set_title("Evaluate Makespan")
-        ax.set_xlabel("Evaluate Round")
-        ax.set_ylabel("Makespan (min)")
-        ax.legend()
-        plt.tight_layout()
-        plt.savefig(os.path.join(out_dir, "evaluate_makespan.png"), dpi=160)
-        plt.close(fig)
-
-    # 4) 胜率/平均奖励
-    win = info.get("win_rates", [])
-    avg_r = info.get("average_reward", [])
-    if win or avg_r:
-        fig = plt.figure(figsize=(10, 4))
-        ax = plt.gca()
-        if avg_r:
-            ax.plot(avg_r, label="average_reward", linewidth=1.0)
-        if win:
-            ax2 = ax.twinx()
-            ax2.plot(win, label="win_rate", linestyle='--',
-                     linewidth=1.0, color='#e15759')
-            ax2.set_ylabel("Win Rate")
-        ax.set_title("Evaluation Metrics")
-        ax.set_xlabel("Evaluate Round")
-        ax.set_ylabel("Reward")
-        lines, labels = ax.get_legend_handles_labels()
-        if win:
-            lines2, labels2 = ax2.get_legend_handles_labels()
-            lines += lines2
-            labels += labels2
-        plt.legend(lines, labels, loc='best')
-        plt.tight_layout()
-        plt.savefig(os.path.join(out_dir, "evaluation_metrics.png"), dpi=160)
-        plt.close(fig)

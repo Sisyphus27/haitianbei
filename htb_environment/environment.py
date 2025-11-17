@@ -18,6 +18,7 @@ from utils.site import Sites, Site
 # 固定/移动设备
 
 
+# LOG：固定资源实现逻辑
 @dataclass
 class FixedDevice:
     dev_id: str
@@ -38,6 +39,8 @@ class FixedDevice:
         return (stand_id in self.cover_stands) and (len(self.in_use) < self.capacity)
 
 
+# LOG：移动资源实现逻辑
+# LOG：路径规划实现逻辑
 @dataclass
 class MobileDevice:
     dev_id: str
@@ -99,6 +102,11 @@ class ScheduleEnv:
         self.disturbance_history: List[Dict[str, Any]] = []
         self.disturbance_forced_planes: Set[int] = set()
         self.disturbance_forced_from: Dict[int, Optional[int]] = {}
+        # 记录当前step内被动作提前占用的停机位，避免同一步出现多机同位
+        self._reserved_stands: Dict[int, int] = {}
+        # 记录已被分配为“在途目标”的停机位，阻止其它飞机在其空闲期间再次分配
+        self._incoming_stand_reserved: Dict[int, int] = {}
+        self._incoming_target_by_plane: Dict[int, int] = {}
 
         # 干涉表（技术资料）
         self.inbound_block: Dict[int, Tuple[int, float]] = {
@@ -142,7 +150,7 @@ class ScheduleEnv:
         # MARL接口所需
         self.n_agents = 0
         self.n_actions = len(self.sites) + 3  # 所有站位/跑道 + WAIT + BUSY + DONE
-        self.episode_limit = 1000  # 可按需要调整
+        self.episode_limit = 10000  # 可按需要调整
         self._solve_reserved = []
 
         # 记录（时刻, job_id, site_id, plane_id, proc_min, move_min）
@@ -181,6 +189,81 @@ class ScheduleEnv:
     def _is_stand_occupied(self, stand_id: int) -> bool:
         return self.stand_current_occupancy.get(stand_id, None) is not None
 
+    def _reserve_stand_for_step(self, stand_id: int, plane_id: int):
+        """
+        在当前决策步中预留停机位，防止其它飞机在本步再次选择同一位置。
+        仅处理 1..28 号停机位。
+        """
+        if stand_id not in self.stand_current_occupancy:
+            return
+        holder = self._reserved_stands.get(stand_id)
+        if holder is not None and holder != plane_id:
+            return
+        self._reserved_stands[stand_id] = plane_id
+
+    def _reserve_incoming_stand(self, stand_id: int, plane_id: int):
+        """
+        记录 plane_id 正在赶往 stand_id，在到达前阻止其它飞机再次分配。
+        """
+        if stand_id not in self.stand_current_occupancy:
+            return
+        prev = self._incoming_target_by_plane.get(plane_id)
+        if prev is not None and prev != stand_id:
+            self._incoming_stand_reserved.pop(prev, None)
+        self._incoming_stand_reserved[stand_id] = plane_id
+        self._incoming_target_by_plane[plane_id] = stand_id
+
+    def _release_incoming_stand(self, plane_id: int, stand_id: Optional[int] = None):
+        """
+        解除 plane_id 的在途停机位预约（到达或被打断时调用）。
+        """
+        tgt = stand_id
+        if tgt is None:
+            tgt = self._incoming_target_by_plane.pop(plane_id, None)
+        else:
+            if self._incoming_target_by_plane.get(plane_id) == tgt:
+                self._incoming_target_by_plane.pop(plane_id, None)
+        if tgt is None:
+            return
+        holder = self._incoming_stand_reserved.get(tgt)
+        if holder == plane_id:
+            self._incoming_stand_reserved.pop(tgt, None)
+
+    def _occupy_stand(self, stand_id: int, plane_id: int):
+        """
+        标记某个停机位被 plane_id 占用（物理占位）。
+        若已被其他飞机占用则抛出异常，方便暴露逻辑错误。
+        """
+        if stand_id not in self.stand_current_occupancy:
+            # 只管理 1~28 号停机位，跑道 29~31 不在此表中
+            return
+        cur = self.stand_current_occupancy.get(stand_id)
+        if cur is None:
+            self.stand_current_occupancy[stand_id] = plane_id
+        elif cur != plane_id:
+            # 如果触发这里，说明逻辑确实产生了“多机同位”，直接抛错
+            raise AssertionError(
+                f"Stand {stand_id} already occupied by plane {cur}, cannot occupy by plane {plane_id}"
+            )
+
+    def _release_stand(self, stand_id: int, plane_id: Optional[int] = None):
+        """
+        释放某个停机位占用，并记录 last_leave_time_by_stand。
+        plane_id 若不为 None，则只在当前占用者等于 plane_id 时才释放。
+        """
+        if stand_id not in self.stand_current_occupancy:
+            return
+        cur = self.stand_current_occupancy.get(stand_id)
+        if cur is None:
+            return
+        if (plane_id is not None) and (cur != plane_id):
+            # 当前记录的是别的飞机，占用不归这个 plane_id 管，跳过
+            return
+        self.stand_current_occupancy[stand_id] = None
+        self.last_leave_time_by_stand[stand_id] = self.current_time
+
+
+        # LOG：碰撞冲突检测及避让实现逻辑
     def _stand_available_inbound(self, stand_id: int) -> bool:
         if not self.enable_space:
             return True
@@ -193,6 +276,7 @@ class ScheduleEnv:
             return False
         return True
 
+    # LOG：碰撞冲突检测及避让实现逻辑
     def _runway_available_outbound(self, runway_id: int) -> bool:
         if not self.enable_space:
             return True
@@ -253,6 +337,7 @@ class ScheduleEnv:
 
     # ADD:设备池
 
+    # LOG：固定资源实现逻辑
     def _build_fixed_devices(self):
         cover = {
             "FR1": ("R001", range(1, 7)),  "FR2": ("R001", range(7, 15)), "FR3": ("R001", range(15, 23)), "FR4": ("R001", range(23, 29)),
@@ -269,6 +354,7 @@ class ScheduleEnv:
             self.fixed_devices.append(FixedDevice(
                 k, rtype, set(list(rng)), capacity=2))
 
+    # LOG：移动资源实现逻辑
     def _build_mobile_devices(self):
         init = [
             ("MR01", "R002", 5), ("MR02", "R003", 6), ("MR03",
@@ -304,6 +390,9 @@ class ScheduleEnv:
                     best = min(best, now + p.eta_proc_end)
         return best
 
+    # LOG：固定资源实现逻辑
+    # LOG：移动资源实现逻辑
+    # LOG：路径规划实现逻辑
     def _alloc_resources_for_job(self, job: Job, stand_id: int, plane: Plane) -> Tuple[bool, float, List[object]]:
         """
         为即将开工的 job 选择设备：
@@ -506,6 +595,9 @@ class ScheduleEnv:
         self.disturbance_forced_planes.clear()
         self.disturbance_forced_from.clear()
         self.disturbance_events = self._load_disturbance_events()
+        self._reserved_stands.clear()
+        self._incoming_stand_reserved.clear()
+        self._incoming_target_by_plane.clear()
 
         # 更新动作数 —— 构造到达计划
         self.arrival_plan.clear()
@@ -782,7 +874,8 @@ class ScheduleEnv:
         events: List[Dict[str, Any]] = []
         if not self.enable_disturbance:
             return events
-        cfg = getattr(self.args, "disturbance_events", "") if self.args is not None else ""
+        cfg = getattr(self.args, "disturbance_events",
+                      "") if self.args is not None else ""
         if not cfg:
             return events
         raw = None
@@ -843,7 +936,8 @@ class ScheduleEnv:
                 return json.loads(sanitized)
             except json.JSONDecodeError:
                 pass
-        key_fixed = re.sub(r'(?<!["\\])([A-Za-z_][A-Za-z0-9_]*)\s*:', r'"\1":', sanitized)
+        key_fixed = re.sub(
+            r'(?<!["\\])([A-Za-z_][A-Za-z0-9_]*)\s*:', r'"\1":', sanitized)
         try:
             return json.loads(key_fixed)
         except json.JSONDecodeError:
@@ -905,14 +999,16 @@ class ScheduleEnv:
             if site_id is None or site_id not in stands:
                 continue
             if plane.status == "PROCESSING":
-                paused = self._pause_plane_due_to_disturbance(pid, plane, site_id)
+                paused = self._pause_plane_due_to_disturbance(
+                    pid, plane, site_id)
                 if paused:
                     affected.append(pid)
             else:
                 self._evacuate_plane_from_blocked(pid, plane, site_id)
                 affected.append(pid)
         if resources or device_ids:
-            affected_eq = self._activate_equipment_disturbance(resources, device_ids)
+            affected_eq = self._activate_equipment_disturbance(
+                resources, device_ids)
             affected.extend(affected_eq)
         affected = sorted(set(affected))
         event["affected_planes"] = affected
@@ -921,8 +1017,8 @@ class ScheduleEnv:
             "action": "start",
             "time": float(self.current_time),
             "stands": sorted(stands),
-             "resources": sorted(resources),
-             "devices": sorted(device_ids),
+            "resources": sorted(resources),
+            "devices": sorted(device_ids),
             "affected": affected
         })
         meta = []
@@ -933,7 +1029,8 @@ class ScheduleEnv:
         if device_ids:
             meta.append(f"devices {sorted(device_ids)}")
         desc = ", ".join(meta) if meta else "no scope"
-        print(f"[Disturbance] Event {event.get('id')} activated at {self.current_time:.2f} min, {desc}")
+        print(
+            f"[Disturbance] Event {event.get('id')} activated at {self.current_time:.2f} min, {desc}")
 
     def _complete_disturbance(self, event: Dict[str, Any]):
         event["completed"] = True
@@ -942,7 +1039,8 @@ class ScheduleEnv:
         resources = {r.upper()
                      for r in event.get("resource_types", []) or []}
         if resources:
-            self.disturbance_blocked_resource_types.difference_update(resources)
+            self.disturbance_blocked_resource_types.difference_update(
+                resources)
         devices = {d.upper() for d in event.get("device_ids", []) or []}
         for dev_id in devices:
             self._set_device_down(dev_id, False)
@@ -963,7 +1061,8 @@ class ScheduleEnv:
         if devices:
             meta.append(f"devices {sorted(devices)}")
         desc = ", ".join(meta) if meta else "no scope"
-        print(f"[Disturbance] Event {event.get('id')} completed at {self.current_time:.2f} min, {desc}")
+        print(
+            f"[Disturbance] Event {event.get('id')} completed at {self.current_time:.2f} min, {desc}")
 
     def _activate_equipment_disturbance(self, resources: Set[str], device_ids: Set[str]) -> List[int]:
         affected: List[int] = []
@@ -997,7 +1096,8 @@ class ScheduleEnv:
                 "current_site_id": self.sites[plane.current_site_id].site_id if plane.current_site_id is not None and 0 <= plane.current_site_id < len(self.sites) else None,
                 "finished_codes": sorted(list(plane.finished_codes)),
                 "paused_jobs": [
-                    {"code": entry.get("code"), "remaining": entry.get("remaining", 0.0)}
+                    {"code": entry.get("code"), "remaining": entry.get(
+                        "remaining", 0.0)}
                     for entry in getattr(plane, "paused_jobs", [])
                 ],
                 "active_job": plane.current_job_code,
@@ -1084,7 +1184,8 @@ class ScheduleEnv:
             plane.active_job_progress = {
                 job.code: progress_map.get(job.code, 0.0) for job in keep_jobs}
             plane._job_total_durations = {
-                job.code: total_map.get(job.code, plane.active_job_progress[job.code])
+                job.code: total_map.get(
+                    job.code, plane.active_job_progress[job.code])
                 for job in keep_jobs}
             plane._active_event_indices = [
                 (code, idx) for code, idx in evt_idx_map.items() if code in plane.active_job_progress]
@@ -1113,8 +1214,7 @@ class ScheduleEnv:
             plane._last_handles = []
             plane._handles_by_job = {}
         if stand_id in self.stand_current_occupancy:
-            self.stand_current_occupancy[stand_id] = None
-            self.last_leave_time_by_stand[stand_id] = self.current_time
+            self._release_stand(stand_id, pid)
         paused_entries = []
         jobs: List[Job] = []
         if getattr(plane, "_active_jobs", None):
@@ -1127,7 +1227,8 @@ class ScheduleEnv:
             return False
         evt_idx_map = dict(getattr(plane, "_active_event_indices", []))
         for job in jobs:
-            remaining = float(plane.active_job_progress.get(job.code, plane.eta_proc_end))
+            remaining = float(plane.active_job_progress.get(
+                job.code, plane.eta_proc_end))
             total = float(plane._job_total_durations.get(job.code, remaining))
             if remaining <= 1e-6:
                 continue
@@ -1163,8 +1264,7 @@ class ScheduleEnv:
 
     def _register_forced_plane(self, pid: int, plane: Plane, stand_id: Optional[int]):
         if stand_id is not None and stand_id in self.stand_current_occupancy:
-            self.stand_current_occupancy[stand_id] = None
-            self.last_leave_time_by_stand[stand_id] = self.current_time
+            self._release_stand(stand_id, pid)
         plane.current_site_id = None
         self.disturbance_forced_planes.add(pid)
         self.disturbance_forced_from[pid] = stand_id
@@ -1190,10 +1290,12 @@ class ScheduleEnv:
             return True
         target_idx = self._select_backup_stand(plane)
         if target_idx is None:
-            holding = self.sites[self.landing_runway_site_for_pos - 1].absolute_position
+            holding = self.sites[self.landing_runway_site_for_pos -
+                                 1].absolute_position
             plane.position = holding.copy()
             return False
         site_to = self.sites[target_idx]
+        self._reserve_stand_for_step(site_to.site_id, pid)
         from_site = None
         if from_site_id is not None:
             for s in self.sites:
@@ -1209,15 +1311,18 @@ class ScheduleEnv:
         if from_site is not None:
             jobT = self.jobs_obj.get_job("ZY_T")
             if jobT is not None:
-                can, wait_min, handles = self._alloc_resources_for_job(jobT, from_site.site_id, plane)
+                can, wait_min, handles = self._alloc_resources_for_job(
+                    jobT, from_site.site_id, plane)
                 if can:
                     move_code = "ZY_T"
                 else:
                     handles = None
                     wait_min = 0.0
         speed = self._speed_m_per_min()
-        from_pos = from_site.absolute_position.copy() if from_site is not None else plane.position.copy()
-        travel_min = count_path_on_road(from_pos, site_to.absolute_position, speed)
+        from_pos = from_site.absolute_position.copy(
+        ) if from_site is not None else plane.position.copy()
+        travel_min = count_path_on_road(
+            from_pos, site_to.absolute_position, speed)
         total_move = float(wait_min + travel_min)
         jid = self.jobs_obj.code2id().get(move_code)
         if jid is None:
@@ -1248,11 +1353,18 @@ class ScheduleEnv:
                 continue
             if self.stand_current_occupancy.get(site.site_id, None) is not None:
                 continue
+            reserved_by = self._reserved_stands.get(site.site_id)
+            if reserved_by is not None and reserved_by != plane.plane_id:
+                continue
+            reserved_future = self._incoming_stand_reserved.get(site.site_id)
+            if reserved_future is not None and reserved_future != plane.plane_id:
+                continue
             if not site.is_available(self.current_time):
                 continue
             if not self._stand_available_inbound(site.site_id):
                 continue
-            dist = float(np.linalg.norm(plane.position - site.absolute_position))
+            dist = float(np.linalg.norm(
+                plane.position - site.absolute_position))
             candidates.append((dist, idx))
         if not candidates:
             return None
@@ -1299,9 +1411,10 @@ class ScheduleEnv:
             plane._active_event_indices = [
                 (job.code, len(self.episodes_situation) - 1)]
             if not site_cur.is_runway:
-                self.stand_current_occupancy[site_cur.site_id] = pid
+                self._occupy_stand(site_cur.site_id, pid)
             self._assign_handles_to_jobs(
                 plane, {job.code: handles or []})
+
             plane.paused_jobs.pop(idx)
             return True
         return False
@@ -1351,6 +1464,12 @@ class ScheduleEnv:
                 # 站位已被占用，则跳过（容量>1 时请改为“容量计数”）
                 if self.stand_current_occupancy.get(site.site_id, None) is not None:
                     continue
+                reserved_by = self._reserved_stands.get(site.site_id)
+                if reserved_by is not None and reserved_by != i:
+                    continue
+                reserved_future = self._incoming_stand_reserved.get(site.site_id)
+                if reserved_future is not None and reserved_future != i:
+                    continue
             if self.enable_disturbance and site.site_id in self.disturbance_blocked_stands:
                 continue
             if not site.is_available(self.current_time):
@@ -1385,13 +1504,16 @@ class ScheduleEnv:
     # 当步预占（静态站位资源）
 
     def has_chosen_action(self, site_id: int, agent_id: int):
-        site = next(s for s in self.sites if s.site_id ==
-                    (site_id if site_id >= 1 else site_id+1))
-        for idx, cnt in enumerate(site.resource_number):
-            if cnt > 0:
-                site.resource_number[idx] -= 1
-                self._solve_reserved.append((site, idx))
-                break
+        """
+        提前标记在当前 decision step 中被 agent 选择的停机位，防止其它 agent
+        在掩码判断阶段继续看到该站位空闲。site_id 是 self.sites 的索引。
+        """
+        if site_id < 0 or site_id >= len(self.sites):
+            return
+        site = self.sites[site_id]
+        if site.is_runway:
+            return
+        self._reserve_stand_for_step(site.site_id, agent_id)
 
     # 关键逻辑：解析动作→ETA推进→到位/开工/完工→释放/干涉时钟
     # LOG:核心step()
@@ -1467,6 +1589,7 @@ class ScheduleEnv:
                 cur_sid = None
                 if plane.current_site_id is not None and 0 <= plane.current_site_id < len(self.sites):
                     cur_sid = self.sites[plane.current_site_id].site_id
+                # 只有目标站位与当前站位不同且有实际移动距离才考虑移动
                 if mv is not None and (cur_sid != site_to.site_id) and (float(move_min) > 1e-9):
                     if mv == "ZY_T":
                         jobT = self.jobs_obj.get_job("ZY_T")
@@ -1482,6 +1605,13 @@ class ScheduleEnv:
                         if not can:
                             # 分配不到牵引车，取消本步移动
                             continue
+
+                        # ★ 确认可以牵引后，释放原停机位占用
+                        if not site_to.is_runway:
+                            self._reserve_incoming_stand(site_to.site_id, pid)
+                        if cur_sid is not None and cur_sid in self.stand_current_occupancy:
+                            self._release_stand(cur_sid, pid)
+
                         # 牵引“行驶时间”用移动设备速度估计：取被锁定的 R014 中的第一台
                         tow_speed_m_per_min = self._speed_m_per_min()
                         for h in handles or []:
@@ -1496,7 +1626,6 @@ class ScheduleEnv:
                         jid = self.jobs_obj.code2id()[mv]
                         self.episodes_situation.append(
                             (self.current_time, jid, site_to.site_id, pid, 0.0, total_move))
-                        # 记录设备ID（方便你在 plan.json / 甘特上查看）
                         fix_ids, mob_ids = [], []
                         for h in handles or []:
                             if isinstance(h, MobileDevice):
@@ -1510,7 +1639,13 @@ class ScheduleEnv:
                         plane.start_move(
                             to_site_id=site_to.site_id - 1, move_min=total_move)
                     else:
-                        # ZY_M 保持原有逻辑
+                        # ZY_M：从当前站位或跑道滑行到目标站位
+                        # 若当前在某个停机位，开始滑行时释放占用
+                        if cur_sid is not None and cur_sid in self.stand_current_occupancy:
+                            self._release_stand(cur_sid, pid)
+
+                        if not site_to.is_runway:
+                            self._reserve_incoming_stand(site_to.site_id, pid)
                         jid = self.jobs_obj.code2id()[mv]
                         self.episodes_situation.append(
                             (self.current_time, jid, site_to.site_id, pid, 0.0, float(move_min)))
@@ -1554,6 +1689,11 @@ class ScheduleEnv:
                         plane._move_handles = None
                     plane.move_code = None
 
+                    # ★ 到达停机位时标记物理占位
+                    if site_cur is not None and (not site_cur.is_runway):
+                        self._occupy_stand(site_cur.site_id, pid)
+                        self._release_incoming_stand(pid, site_cur.site_id)
+
             if plane.status == "PROCESSING":
                 plane.eta_proc_end = max(0.0, plane.eta_proc_end - delta_t)
                 if getattr(plane, "active_job_progress", None):
@@ -1561,7 +1701,8 @@ class ScheduleEnv:
                         plane.active_job_progress[code] = max(
                             0.0, plane.active_job_progress[code] - delta_t)
                     if plane.active_job_progress:
-                        plane.eta_proc_end = max(plane.active_job_progress.values())
+                        plane.eta_proc_end = max(
+                            plane.active_job_progress.values())
 
             if plane.status == "IDLE" and site_cur is not None:
                 idle_candidates.append(pid)
@@ -1604,9 +1745,6 @@ class ScheduleEnv:
                 # 清占用&互锁时间
                 if plane.current_site_id is not None:
                     sid = self.sites[plane.current_site_id].site_id
-                    if sid in self.stand_current_occupancy:
-                        self.stand_current_occupancy[sid] = None
-                        self.last_leave_time_by_stand[sid] = self.current_time
                     if any_outbound and sid in (29, 30, 31):
                         self.last_leave_time_by_runway[sid] = self.current_time
 
@@ -1693,7 +1831,7 @@ class ScheduleEnv:
                         plane._active_event_indices = [
                             (job_for_site.code, len(self.episodes_situation) - 1)]
                         if not site_cur.is_runway:
-                            self.stand_current_occupancy[site_cur.site_id] = pid
+                            self._occupy_stand(site_cur.site_id, pid)
                         if self.enable_long_occupy and job_for_site.code in ("ZY03", "ZY02") and job_for_site.required_resources:
                             plane.long_occupy.add(
                                 job_for_site.required_resources[0])
@@ -1724,7 +1862,8 @@ class ScheduleEnv:
                     self.episode_devices.append(
                         {"FixedDevices": fix_ids, "MobileDevices": mob_ids})
                     job_handle_map[j.code] = list(hlist or [])
-                    event_indices.append((j.code, len(self.episodes_situation) - 1))
+                    event_indices.append(
+                        (j.code, len(self.episodes_situation) - 1))
 
                 if durations:
                     plane._active_jobs = valid_jobs
@@ -1738,7 +1877,7 @@ class ScheduleEnv:
                     plane._job_total_durations = plane.active_job_progress.copy()
                     plane._active_event_indices = event_indices
                     if not site_cur.is_runway:
-                        self.stand_current_occupancy[site_cur.site_id] = pid
+                        self._occupy_stand(site_cur.site_id, pid)
                     inst_reward += self.bonus_parallel_per_job * \
                         (len(accepted) - 1)
 
@@ -1778,6 +1917,7 @@ class ScheduleEnv:
         for site, idx in self._solve_reserved:
             site.resource_number[idx] += 1
         self._solve_reserved.clear()
+        self._reserved_stands.clear()
         return reward, terminated, info
     # 扰动注入
 
@@ -1801,3 +1941,4 @@ class ScheduleEnv:
             dev_id = event["dev_id"]
             self._set_device_down(dev_id, True)
             self.disturbance_blocked_device_ids.add(dev_id.upper())
+    
