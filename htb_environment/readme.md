@@ -33,6 +33,10 @@ python main.py --learn False --load_model True --n_agents 60 --batch_mode --batc
 示例：
 
 ```bash
+python main.py --learn False --load_model True --n_agents 60 --batch_mode --batch_size_per_batch 12 --batches_count 5 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --result_name disturbance_test --evaluate_epoch 1 --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":[5,6,7,8,9,10]}]'
+
+python utils/disturbance_gantt.py --evaluate_json result/qmix/60_agents/disturbance_test/evaluate.json --disturbance_start 450 --disturbance_end 550 --stands 5-10
+
 python main.py --learn False --load_model False --n_agents 12 --batch_mode --batch_size_per_batch 12 --batches_count 1 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --evaluate_epoch 1 --result_name disturbance_test --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":"5,6,7,8,9,10"},{"start":470,"end":520,"resource_types":["R002","R005"]},{"start":530,"end":570,"devices":["FR09","MR05"]}]'
 
 python main.py --learn False --load_model False --n_agents 12 --batch_mode --batch_size_per_batch 12 --batches_count 1 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --evaluate_epoch 1 --result_name disturbance_test --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":"5-10"},{"start":470,"end":520,"resource_types":["R002","R005"]},{"start":530,"end":570,"devices":["FR09","MR05"]}]'
