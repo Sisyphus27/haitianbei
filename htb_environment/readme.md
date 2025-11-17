@@ -25,6 +25,8 @@
 python main.py --learn False --load_model True --n_agents 60 --batch_mode --batch_size_per_batch 12 --batches_count 5 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --result_name my_multi_batch_run --evaluate_epoch 1
 
 python main.py --learn False --load_model True --n_agents 18 --batch_mode --batch_size_per_batch 6 --batches_count 3 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --result_name my_multi_batch_run --evaluate_epoch 1
+
+python main.py --n_agents 60 --batch_mode --batch_size_per_batch 12 --batches_count 5 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --result_name my_multi_batch_run --evaluate_epoch 1 --episode_limit 2000 --template_seed_dir result/qmix/60_agents/my_multi_batch_run/template --template_seed_repeat 1 --template_pretrain_steps 50 --epsilon_after_seed 0.2 --n_epoch 1 --n_episodes 1 --train_steps 1
 ```
 
 ## 扰动事件配置
@@ -35,7 +37,9 @@ python main.py --learn False --load_model True --n_agents 18 --batch_mode --batc
 示例：
 
 ```bash
-python main.py --learn False --load_model True --n_agents 60 --batch_mode --batch_size_per_batch 12 --batches_count 5 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --result_name disturbance_test --evaluate_epoch 1 --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":[5,6,7,8,9,10]}]'
+python main.py --learn False --load_model True --n_agents 60 --batch_mode --batch_size_per_batch 12 --batches_count 5 --intra_gap_min 2 --inter_batch_gap_min 60 --batch_start_time_min 420 --result_name disturbance_test --evaluate_epoch 1 --enable_disturbance --disturbance_events '[{"start":450,"end":550,"stands":[5,6,7,8,9,10]}]' --episode_limit 2000 --template_seed_dir result/qmix/60_agents/disturbance_test/template --template_seed_repeat 1 --template_pretrain_steps 50 --epsilon_after_seed 0.2 --n_epoch 1 --n_episodes 1 --train_steps 1
+
+
 
 python utils/disturbance_gantt.py --evaluate_json result/qmix/60_agents/disturbance_test/evaluate.json --disturbance_start 450 --disturbance_end 550 --stands 5-10
 

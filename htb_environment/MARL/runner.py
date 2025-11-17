@@ -40,6 +40,10 @@ class Runner:
 
         if args.learn:
             self.buffer = ReplayBuffer(args)
+            self._maybe_seed_replay_buffer()
+            self._maybe_pretrain_from_template()
+        else:
+            self.buffer = None
 
         self.win_rates = []
         self.episode_rewards = []
@@ -65,6 +69,35 @@ class Runner:
         self.save_path = self.args.result_dir + '/' + args.alg + \
             '/' + str(args.n_agents)+'_agents' + '/' + args.result_name
         os.makedirs(self.save_path, exist_ok=True)
+
+    def _maybe_seed_replay_buffer(self):
+        seed_dir = getattr(self.args, "template_seed_dir", "")
+        if not seed_dir:
+            return
+        repeat = max(1, int(getattr(self.args, "template_seed_repeat", 1)))
+        print(f"[TemplateSeed] injecting {repeat} template episode(s) from {seed_dir}")
+        for i in range(repeat):
+            try:
+                template_episode, *_ = self.rolloutWorker.generate_template_episode(seed_dir)
+            except Exception as exc:
+                print(f"[TemplateSeed] failed to load template ({exc}), abort seeding")
+                return
+            self.buffer.store_episode(template_episode)
+        if getattr(self.args, "epsilon_after_seed", None) is not None:
+            self.rolloutWorker.epsilon = float(self.args.epsilon_after_seed)
+            self.args.epsilon = float(self.args.epsilon_after_seed)
+        self._template_seeded = True
+
+    def _maybe_pretrain_from_template(self):
+        if not getattr(self, "_template_seeded", False):
+            return
+        steps = int(getattr(self.args, "template_pretrain_steps", 0) or 0)
+        if steps <= 0 or self.buffer.current_size <= 0:
+            return
+        print(f"[TemplateSeed] pretraining on template buffer for {steps} step(s)")
+        for t in range(steps):
+            mini_batch = self.buffer.sample(1)
+            self.agents.train(mini_batch, t)
 
     def run(self, alg):
         start_time = datetime.now()

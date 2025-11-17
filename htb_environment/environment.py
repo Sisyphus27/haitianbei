@@ -574,6 +574,7 @@ class ScheduleEnv:
         self.planes_obj = Planes(n_agents)
         self.planes = self.planes_obj.planes_object_list
         self.n_agents = n_agents
+        self._update_episode_limit()
         for p in self.planes:
             p.fuel_percent = 20.0  # 外部进场；若一开始就在停机位，可设为100
             p._last_handles = []
@@ -655,6 +656,32 @@ class ScheduleEnv:
         self._process_disturbance_timeline(initial=True)
         return self.get_obs()
 
+    def _update_episode_limit(self):
+        """
+        动态调整 episode_limit：当飞机数量较多或启用 batch_mode 时，
+        自动把步长上限拉高，避免“长时间等待”导致提前触发 episode_limit。
+        如果 args 显式提供 episode_limit，则直接使用该值。
+        """
+        if self.args is not None:
+            custom = getattr(self.args, "episode_limit", None)
+            if custom is not None:
+                try:
+                    self.episode_limit = int(custom)
+                    setattr(self.args, "episode_limit", self.episode_limit)
+                    return
+                except (TypeError, ValueError):
+                    pass
+        planes = max(1, getattr(self, "n_agents", 0))
+        jobs_per_plane = max(1, len(self.jobs_obj.jobs_object_list))
+        if self.args is not None and getattr(self.args, "batch_mode", False):
+            scale = 3.0
+        else:
+            scale = 2.5 if planes > 30 else 2.0
+        est_limit = int(np.ceil(jobs_per_plane * planes * scale))
+        self.episode_limit = max(self.episode_limit, est_limit)
+        if self.args is not None:
+            setattr(self.args, "episode_limit", self.episode_limit)
+
     def _pick_stage_runway_index(self, pid: int) -> Optional[int]:
         preferred = getattr(self.args, "stage_runway_order", [29, 30, 31])
         for rid in preferred:
@@ -685,6 +712,27 @@ class ScheduleEnv:
         moved, penalty = self._handle_move_action(
             pid, runway_idx, allow_early_runway=True)
         return moved, penalty
+
+    def _auto_assign_inbound_stand(self, pid: int) -> bool:
+        """
+        若某飞机已落地（在跑道位）且尚有保障任务待做，而当前 agent 行为无法把它
+        推入可用停机位，则自动选择一个最近的可用停机位，避免长时间等待导致 episode_limit 被消耗。
+        """
+        plane = self.planes[pid]
+        if plane.status != "IDLE":
+            return False
+        if not self._plane_has_support_left(plane):
+            return False
+        if plane.current_site_id is None or not (0 <= plane.current_site_id < len(self.sites)):
+            return False
+        site_cur = self.sites[plane.current_site_id]
+        if not site_cur.is_runway:
+            return False
+        target_idx = self._select_backup_stand(plane)
+        if target_idx is None:
+            return False
+        moved, _ = self._handle_move_action(pid, target_idx, allow_early_runway=True)
+        return moved
 
     def get_env_info(self):
         # 先构造 state 用来取维度（我们刚刚实现了 get_state，未 reset 也能返回占位）
@@ -1685,6 +1733,7 @@ class ScheduleEnv:
                 just_landed[pid] = True
 
         # (2) 解析动作：开始移动时立即记“移动事件”
+        wait_idx = len(self.sites)
         for pid, act in enumerate(actions):
             plane: Plane = self.planes[pid]
             if "ZY_Z" not in plane.finished_codes or just_landed[pid]:
@@ -1700,7 +1749,12 @@ class ScheduleEnv:
                 inst_reward += penalty
                 if moved:
                     continue
-            # 其它动作（WAIT/BUSY/DONE）保持当前逻辑，无需额外处理
+                if self._auto_assign_inbound_stand(pid):
+                    continue
+            else:
+                if act == wait_idx and self._auto_assign_inbound_stand(pid):
+                    continue
+            # 其它动作（BUSY/DONE）保持当前逻辑，无需额外处理
 
         # (3) 时间推进
         etas = []

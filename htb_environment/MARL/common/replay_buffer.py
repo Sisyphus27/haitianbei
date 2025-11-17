@@ -15,17 +15,18 @@ class ReplayBuffer:
         self.current_idx = 0
         self.current_size = 0
         # create the buffer to store info
-        self.buffers = {'o': np.empty([self.size, self.episode_limit, self.n_agents, self.obs_shape]),
-                        'u': np.empty([self.size, self.episode_limit, self.n_agents, 1]),
-                        's': np.empty([self.size, self.episode_limit, self.state_shape]),
-                        'r': np.empty([self.size, self.episode_limit, 1]),
-                        'o_next': np.empty([self.size, self.episode_limit, self.n_agents, self.obs_shape]),
-                        's_next': np.empty([self.size, self.episode_limit, self.state_shape]),
-                        'avail_u': np.empty([self.size, self.episode_limit, self.n_agents, self.n_actions]),
-                        'avail_u_next': np.empty([self.size, self.episode_limit, self.n_agents, self.n_actions]),
-                        'u_onehot': np.empty([self.size, self.episode_limit, self.n_agents, self.n_actions]),
-                        'padded': np.empty([self.size, self.episode_limit, 1]),
-                        'terminated': np.empty([self.size, self.episode_limit, 1])
+        float_dtype = np.float32
+        self.buffers = {'o': np.empty([self.size, self.episode_limit, self.n_agents, self.obs_shape], dtype=float_dtype),
+                        'u': np.empty([self.size, self.episode_limit, self.n_agents, 1], dtype=np.int32),
+                        's': np.empty([self.size, self.episode_limit, self.state_shape], dtype=float_dtype),
+                        'r': np.empty([self.size, self.episode_limit, 1], dtype=float_dtype),
+                        'o_next': np.empty([self.size, self.episode_limit, self.n_agents, self.obs_shape], dtype=float_dtype),
+                        's_next': np.empty([self.size, self.episode_limit, self.state_shape], dtype=float_dtype),
+                        'avail_u': np.empty([self.size, self.episode_limit, self.n_agents, self.n_actions], dtype=float_dtype),
+                        'avail_u_next': np.empty([self.size, self.episode_limit, self.n_agents, self.n_actions], dtype=float_dtype),
+                        'u_onehot': np.empty([self.size, self.episode_limit, self.n_agents, self.n_actions], dtype=float_dtype),
+                        'padded': np.empty([self.size, self.episode_limit, 1], dtype=float_dtype),
+                        'terminated': np.empty([self.size, self.episode_limit, 1], dtype=float_dtype)
                         }
         # thread lock
         self.lock = threading.Lock()

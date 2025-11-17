@@ -112,7 +112,11 @@ def _maybe_run_snapshot_mode(args) -> bool:
     args.n_actions = env_info["n_actions"]
     args.state_shape = env_info["state_shape"]
     args.obs_shape = env_info["obs_shape"]
-    args.episode_limit = env_info["episode_limit"]
+    if getattr(args, "episode_limit", None) is None:
+        args.episode_limit = env_info["episode_limit"]
+    else:
+        args.episode_limit = int(args.episode_limit)
+        env.episode_limit = args.episode_limit
     args = get_mixer_args(args)
 
     # 使用 Runner 进行评估（生成甘特/plan_eval 等与批次流程一致）
@@ -162,9 +166,9 @@ def marl_agent_wrapper():
 
     # 如果使用 batch_mode 便默认以评估模式运行（避免 argparse 的 bool 解析陷阱导致无法通过命令行禁用 learn/load_model）
     if getattr(args, 'batch_mode', False):
-        args.learn = False
-        args.load_model = False
-        # pass
+        # args.learn = False
+        # args.load_model = False
+        pass
     # 先构造带 args 的环境
     env = ScheduleEnv(args)
 
@@ -183,7 +187,11 @@ def marl_agent_wrapper():
     args.n_actions = env_info["n_actions"]
     args.state_shape = env_info["state_shape"]
     args.obs_shape = env_info["obs_shape"]
-    args.episode_limit = env_info["episode_limit"]
+    if getattr(args, "episode_limit", None) is None:
+        args.episode_limit = env_info["episode_limit"]
+    else:
+        args.episode_limit = int(args.episode_limit)
+        env.episode_limit = args.episode_limit
 
     print("是否加载模型（测试必须）：", args.load_model, "是否训练：", args.learn)
     runner = Runner(env, args)

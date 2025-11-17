@@ -15,7 +15,7 @@ def get_common_args():
     parser.add_argument('--reuse_network', type=bool, default=True)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--optimizer', type=str, default="RMS")
-    parser.add_argument('--evaluate_epoch', type=int, default=20)
+    parser.add_argument('--evaluate_epoch', type=int, default=1)
     parser.add_argument('--model_dir', type=str, default='./MARL/model')
     parser.add_argument('--result_dir', type=str, default='./result')
     parser.add_argument('--result_name', type=str, default='test')
@@ -68,6 +68,18 @@ def get_common_args():
     parser.add_argument('--inter_batch_gap_min', type=int, default=60,
                         help='批次间隔（上一批最后一架落地到下一批首架落地的分钟数）')
 
+    parser.add_argument('--episode_limit', type=int, default=None,
+                        help='显式指定环境的 episode_limit，避免自动扩张导致的内存膨胀')
+
+    parser.add_argument('--template_seed_dir', type=str, default='',
+                        help='若提供路径，则在训练前加载该目录中的 template 计划，生成成功调度的经验并注入经验回放池')
+    parser.add_argument('--template_seed_repeat', type=int, default=1,
+                        help='模板经验注入次数（可用于多次重复注入同一成功调度以增强效果）')
+    parser.add_argument('--epsilon_after_seed', type=float, default=None,
+                        help='完成模板经验注入后，强制将 epsilon 设置为该值，降低后续探索率')
+    parser.add_argument('--template_pretrain_steps', type=int, default=0,
+                        help='模板注入完成后额外在经验回放池上预训练多少次，以便快速复现成功策略')
+
     # 扰动事件配置
     parser.add_argument('--enable_disturbance', action='store_true', default=False,
                         help='开启扰动事件调度逻辑')
@@ -115,12 +127,12 @@ def get_mixer_args(args):
         _setdefault('epsilon_anneal_scale', 'step')
 
     # loop
-    _setdefault('n_epoch', 5)
-    _setdefault('n_episodes', 5)
-    _setdefault('train_steps', 2)
-    _setdefault('evaluate_cycle', 5)
-    _setdefault('batch_size', 32)
-    _setdefault('buffer_size', 100)
+    _setdefault('n_epoch', 2)
+    _setdefault('n_episodes', 1)
+    _setdefault('train_steps', 1)
+    _setdefault('evaluate_cycle', 1)
+    _setdefault('batch_size', 16)
+    _setdefault('buffer_size', 20)
     _setdefault('save_cycle', 50)
     _setdefault('target_update_cycle', 200)
 
