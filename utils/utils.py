@@ -11,9 +11,12 @@ FilePath: /haitianbei/utils/utils.py
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Iterable
+
+_logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------
@@ -717,7 +720,9 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 			
 			# 映射字典已在try块外初始化，这里只需确保它们已存在
 			
-			# 6.1 查询损坏的停机位（只查询在当前时间点仍然有效的）
+			# 6.1 查询损坏的停机位（只查询在当前时间点仍然有效的，且未被修复的）
+			# 注意：isDamaged = true 且 failureTime IS NOT NULL 表示停机位仍然损坏
+			# 如果 isDamaged = false，说明已经被修复，不应该出现在 disturbance_events 中
 			damaged_stands_query = """
 			MATCH (s:Stand)
 			WHERE s.isDamaged = true
@@ -725,11 +730,13 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 			  AND (s.failureDuration IS NULL OR s.failureTime + COALESCE(s.failureDuration, 60.0) >= $current_time)
 			RETURN s.name AS name,
 			       s.failureTime AS failure_time,
-			       s.failureDuration AS failure_duration
+			       s.failureDuration AS failure_duration,
+			       s.isDamaged AS is_damaged
 			ORDER BY s.name
 			"""
 			
 			damaged_stands_by_time = {}  # {(start, end): [stand_ids]}
+			damaged_stands_found = []  # 用于调试日志
 			
 			for record in sess.run(damaged_stands_query, {"current_time": current_time_min}):
 				stand_name = record.get("name", "")
@@ -744,17 +751,29 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 				stand_id = int(m.group(1))
 				failure_time = record.get("failure_time")
 				failure_duration = record.get("failure_duration")
+				is_damaged = record.get("is_damaged", True)
+				
+				# 双重检查：确保 isDamaged 仍然是 true（防止在查询和生成快照之间被修复）
+				if not is_damaged:
+					_logger.debug(f"[SNAPSHOT] 停机位 {stand_name} 已被修复，跳过（isDamaged={is_damaged}）")
+					continue
 				
 				# 确定开始和结束时间
 				start_time = float(failure_time) if failure_time is not None else float(current_time_min)
 				duration = float(failure_duration) if failure_duration is not None else 60.0
 				end_time = start_time + duration
 				
+				# 验证时间有效性：结束时间应该 >= 当前时间
+				if end_time < current_time_min:
+					_logger.debug(f"[SNAPSHOT] 停机位 {stand_name} 故障已过期（结束时间 {end_time:.2f} < 当前时间 {current_time_min:.2f}），跳过")
+					continue
+				
 				# 按时间段分组
 				time_key = (start_time, end_time)
 				if time_key not in damaged_stands_by_time:
 					damaged_stands_by_time[time_key] = []
 				damaged_stands_by_time[time_key].append(stand_id)
+				damaged_stands_found.append((stand_id, start_time, end_time))
 			
 			# 为每个时间段的停机位创建事件
 			for (start, end), stand_ids in damaged_stands_by_time.items():
@@ -765,6 +784,12 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 					"stands": sorted(stand_ids)
 				})
 				event_id_counter += 1
+			
+			# 记录调试信息
+			if damaged_stands_found:
+				_logger.debug(f"[SNAPSHOT] 查询到 {len(damaged_stands_found)} 个损坏的停机位: {[s[0] for s in damaged_stands_found]}")
+			else:
+				_logger.debug(f"[SNAPSHOT] 未查询到损坏的停机位（当前时间: {current_time_min:.2f}分钟）")
 			
 			# 6.2 查询损坏的设备（固定设备，只查询在当前时间点仍然有效的）
 			damaged_fixed_devices_query = """
@@ -936,6 +961,15 @@ def generate_snapshot_from_kg(kg_service, current_time_min: float) -> tuple[dict
 				event_id_counter += 1
 			
 			snapshot["disturbance_events"] = disturbance_events
+			
+			# 记录最终的 disturbance_events 信息
+			if disturbance_events:
+				total_stands = sum(len(evt.get("stands", [])) for evt in disturbance_events)
+				total_devices = sum(len(evt.get("devices", [])) for evt in disturbance_events)
+				total_resources = sum(len(evt.get("resource_types", [])) for evt in disturbance_events)
+				_logger.info(f"[SNAPSHOT] 生成的 disturbance_events: {len(disturbance_events)} 个事件，涉及 {total_stands} 个停机位、{total_devices} 个设备、{total_resources} 个资源")
+			else:
+				_logger.info(f"[SNAPSHOT] 未生成任何 disturbance_events（当前时间: {current_time_min:.2f}分钟）")
 			
 			# 注意：readme.md 示例中没有 site_unavailable 字段，因此不包含此字段
 		

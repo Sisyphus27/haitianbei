@@ -40,10 +40,15 @@
 # 事件ID白名单：只有这些事件ID会触发大模型调度和强化学习重调度
 SCHEDULE_TRIGGER_EVENT_IDS = [195, 777]
 
+# 仅生成甘特图的事件ID：这些事件只生成甘特图，不进行大模型判定和KG写回
+GANTT_ONLY_EVENT_IDS = [194, 776]  # 事件194对应场景1的前一个事件，事件776对应场景2的前一个事件
+
 # 场景编号映射：事件ID -> 场景编号
 EVENT_SCENARIO_MAP = {
     195: 1,  # 事件ID 195 -> 场景1
-    777: 2   # 事件ID 777 -> 场景2
+    777: 2,  # 事件ID 777 -> 场景2
+    194: 1,  # 事件ID 194 -> 场景1（前一个事件）
+    776: 2   # 事件ID 776 -> 场景2（前一个事件）
 }
 
 def get_scenario_number(event_id: int) -> int:
@@ -155,6 +160,9 @@ try:
     from environment import ScheduleEnv  # type: ignore
     _logger.debug("[INIT] 成功导入 environment.ScheduleEnv")
     
+    from utils.schedule_converter import convert_schedule_with_fixed_logic  # type: ignore
+    _logger.debug("[INIT] 成功导入 utils.schedule_converter.convert_schedule_with_fixed_logic")
+    
     # 验证导入的函数是否可调用
     if not callable(infer_schedule_from_snapshot):
         raise ImportError("infer_schedule_from_snapshot 不是可调用对象")
@@ -173,6 +181,7 @@ except Exception as e:  # 捕获所有异常，不仅仅是 ImportError
     infer_schedule_from_snapshot = None  # type: ignore
     schedule_to_kg_triples = None  # type: ignore
     ScheduleEnv = None  # type: ignore
+    convert_schedule_with_fixed_logic = None  # type: ignore
     # _htb_env_path_saved 已在 try 块外初始化为 None，如果导入失败则保持为 None
 
 # 导入项目根目录的 utils.utils（在强化学习模块导入之后）
@@ -527,6 +536,244 @@ def main():
             except Exception as e:
                 _logger.warning(f"[#{idx+1}] 自动修复过期损坏时出错: {e}")
             
+            # 4.3.5 检查是否是仅生成甘特图的事件（在白名单检查之前）
+            is_gantt_only = event_id in GANTT_ONLY_EVENT_IDS
+            
+            if is_gantt_only:
+                # 仅生成甘特图的事件：生成快照 -> 调用强化学习 -> 生成甘特图（跳过冲突判定和KG写回）
+                scenario_num = get_scenario_number(event_id)
+                _logger.info(f"[#{idx+1}] 事件 ID={event_id} 是仅生成甘特图的事件（场景{scenario_num}的前一个事件），开始生成甘特图流程")
+                
+                result_record = {
+                    "event_id": event_id,
+                    "event_text": event_text,
+                    "time_min": current_time_min,
+                    "potential_conflict": False,
+                    "confirmed_conflict": False,
+                    "compliance": None,
+                    "reasons": [],
+                    "snapshot_file": None,
+                    "reschedule_file": None,
+                    "reschedule_makespan": None,
+                    "reschedule_reward": None,
+                    "output_a_file": None,
+                    "output_s_file": None,
+                    "output_p_file": None,
+                    "judge_output_file": None,
+                    "gantt_only": True
+                }
+                
+                # 生成快照配置
+                snapshot = None
+                try:
+                    if not exp.kg_service:
+                        _logger.error(f"[#{idx+1}] KG服务不可用，无法生成快照")
+                    else:
+                        snapshot, id_to_name_map, all_mappings = generate_snapshot_from_kg(
+                            exp.kg_service,
+                            current_time_min
+                        )
+                        
+                        if snapshot:
+                            snapshot["_aircraft_id_mapping"] = id_to_name_map
+                            snapshot["_aircraft_names"] = list(id_to_name_map.values())
+                            snapshot["_all_mappings"] = all_mappings
+                            _logger.info(f"[#{idx+1}] 快照配置已生成（用于甘特图和S文件）")
+                            
+                            # 4.3.5.1 保存S文件（快照配置的JSON字符串，按照事件编号命名）
+                            try:
+                                output_s_filename = f"事件{event_id}_S_{args.team_name}.txt"
+                                output_s_filepath = os.path.join(args.output_dir, output_s_filename)
+                                os.makedirs(args.output_dir, exist_ok=True)
+                                with open(output_s_filepath, 'w', encoding='utf-8') as f:
+                                    json.dump(snapshot, f, ensure_ascii=False, indent=2)
+                                _logger.info(f"[#{idx+1}] S文件已保存: {output_s_filepath}")
+                                result_record["output_s_file"] = output_s_filepath
+                            except Exception as e:
+                                _logger.warning(f"[#{idx+1}] 保存S文件失败: {e}")
+                                result_record["output_s_file"] = None
+                        else:
+                            _logger.error(f"[#{idx+1}] 快照生成返回None")
+                except Exception as e:
+                    _logger.error(f"[#{idx+1}] 生成快照配置失败: {e}", exc_info=True)
+                
+                # 调用强化学习重调度（仅用于生成甘特图）
+                if snapshot and _RL_AVAILABLE and infer_schedule_from_snapshot is not None and callable(infer_schedule_from_snapshot):
+                    try:
+                        num_planes = len(snapshot.get("planes", []))
+                        from argparse import Namespace
+                        rl_args = Namespace(
+                            n_agents=num_planes,
+                            batch_mode=False,
+                            arrival_gap_min=2,
+                            result_dir=args.output_dir,
+                            result_name="rl_reschedule",
+                            alg="qmix",
+                            n_actions=0,
+                            state_shape=0,
+                            obs_shape=0,
+                            episode_limit=1000,
+                            enable_deps=True,
+                            enable_mutex=True,
+                            enable_dynres=True,
+                            enable_space=True,
+                            enable_long_occupy=False,
+                            enable_disturbance=False,
+                            penalty_idle_per_min=0.05,
+                            epsilon_start=None,
+                            epsilon_end=None,
+                            epsilon_anneal_steps=None,
+                            epsilon_anneal_scale=None
+                        )
+                        
+                        _logger.info(f"[#{idx+1}] ========== 强化学习重调度开始（仅生成甘特图） ==========")
+                        
+                        reschedule_info = infer_schedule_from_snapshot(
+                            rl_args,
+                            snapshot,
+                            policy_fn=None,
+                            max_steps=None
+                        )
+                        
+                        # 生成甘特图
+                        episodes_situation_for_gantt = reschedule_info.get("episodes_situation", [])
+                        devices_situation_for_gantt = reschedule_info.get("devices_situation", [])
+                        
+                        if episodes_situation_for_gantt and convert_schedule_with_fixed_logic is not None and callable(convert_schedule_with_fixed_logic):
+                            # 创建临时目录和文件
+                            temp_dir = os.path.join(args.output_dir, "temp_p_file_generation")
+                            os.makedirs(temp_dir, exist_ok=True)
+                            
+                            temp_evaluate_json = os.path.join(temp_dir, f"temp_evaluate_{event_id:05d}_{timestamp}.json")
+                            temp_plan_eval_json = os.path.join(temp_dir, f"temp_plan_eval_{event_id:05d}_{timestamp}.json")
+                            
+                            try:
+                                # 创建临时环境对象以获取 move_job_id
+                                if ScheduleEnv is None:
+                                    raise ImportError("ScheduleEnv 不可用")
+                                temp_env_for_converter = ScheduleEnv(rl_args)
+                                temp_env_for_converter.reset(rl_args.n_agents)
+                                try:
+                                    move_jid = int(temp_env_for_converter.jobs_obj.code2id().get("ZY_M", 1))
+                                except Exception:
+                                    move_jid = 1
+                                
+                                # 创建临时的 evaluate.json 文件
+                                temp_evaluate_data = {
+                                    "schedule_results": [episodes_situation_for_gantt],
+                                    "devices_results": [devices_situation_for_gantt] if devices_situation_for_gantt else [None],
+                                    "evaluate_reward": [reschedule_info.get("reward", 0.0)],
+                                    "evaluate_makespan": [reschedule_info.get("time", 0.0)]
+                                }
+                                
+                                with open(temp_evaluate_json, 'w', encoding='utf-8') as f:
+                                    json.dump(temp_evaluate_data, f, ensure_ascii=False, indent=2)
+                                
+                                # 创建甘特图输出目录
+                                gantt_output_dir = os.path.join(args.output_dir, "gantt")
+                                os.makedirs(gantt_output_dir, exist_ok=True)
+                                
+                                # 调用 convert_schedule_with_fixed_logic 生成甘特图
+                                convert_schedule_with_fixed_logic(
+                                    temp_evaluate_json,
+                                    temp_plan_eval_json,
+                                    rl_args.n_agents,
+                                    out_dir=gantt_output_dir,
+                                    also_plot=True,
+                                    move_job_id=move_jid,
+                                    batch_size_per_batch=None
+                                )
+                                
+                                # 将生成的甘特图文件重命名为包含场景编号和事件ID的版本
+                                original_gantt_png = os.path.join(gantt_output_dir, "gantt.png")
+                                original_gantt_stand_usage_png = os.path.join(gantt_output_dir, "gantt_stand_usage.png")
+                                
+                                gantt_png_path = os.path.join(gantt_output_dir, f"gantt_scenario_{scenario_num}_event_{event_id}.png")
+                                gantt_stand_usage_png_path = os.path.join(gantt_output_dir, f"gantt_stand_usage_scenario_{scenario_num}_event_{event_id}.png")
+                                
+                                # 重命名文件
+                                try:
+                                    if os.path.exists(original_gantt_png):
+                                        if os.path.exists(gantt_png_path):
+                                            os.remove(gantt_png_path)
+                                        os.rename(original_gantt_png, gantt_png_path)
+                                        _logger.info(f"[#{idx+1}] 甘特图已生成: {gantt_png_path}")
+                                    
+                                    if os.path.exists(original_gantt_stand_usage_png):
+                                        if os.path.exists(gantt_stand_usage_png_path):
+                                            os.remove(gantt_stand_usage_png_path)
+                                        os.rename(original_gantt_stand_usage_png, gantt_stand_usage_png_path)
+                                        _logger.info(f"[#{idx+1}] 停机位使用甘特图已生成: {gantt_stand_usage_png_path}")
+                                except Exception as rename_e:
+                                    _logger.warning(f"[#{idx+1}] 重命名甘特图文件失败: {rename_e}")
+                                
+                                # 清理临时文件
+                                try:
+                                    if os.path.exists(temp_evaluate_json):
+                                        os.remove(temp_evaluate_json)
+                                    if os.path.exists(temp_plan_eval_json):
+                                        os.remove(temp_plan_eval_json)
+                                    if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                                        os.rmdir(temp_dir)
+                                except Exception:
+                                    pass
+                                
+                                _logger.info(f"[#{idx+1}] ========== 甘特图生成完成 ==========")
+                                
+                                # 4.3.5.2 保存P文件（强化学习重调度计划的JSON，按照事件编号命名）
+                                try:
+                                    output_p_filename = f"事件{event_id}_P_{args.team_name}.json"
+                                    output_p_filepath = os.path.join(args.output_dir, output_p_filename)
+                                    os.makedirs(args.output_dir, exist_ok=True)
+                                    
+                                    # 读取生成的 plan_eval.json 内容
+                                    if os.path.exists(temp_plan_eval_json):
+                                        with open(temp_plan_eval_json, 'r', encoding='utf-8') as f:
+                                            plan_eval_data = json.load(f)
+                                        
+                                        # 写入到 P 文件
+                                        with open(output_p_filepath, 'w', encoding='utf-8') as f:
+                                            json.dump(plan_eval_data, f, ensure_ascii=False, indent=2)
+                                        
+                                        _logger.info(f"[#{idx+1}] P文件已保存（plan_eval格式）: {output_p_filepath}")
+                                        result_record["output_p_file"] = output_p_filepath
+                                    else:
+                                        _logger.warning(f"[#{idx+1}] 临时 plan_eval.json 文件不存在，使用原始格式")
+                                        # 回退到原始格式
+                                        reschedule_output = {
+                                            "time": reschedule_info.get("time"),
+                                            "reward": reschedule_info.get("reward"),
+                                            "episodes_situation": reschedule_info.get("episodes_situation", []),
+                                            "devices_situation": reschedule_info.get("devices_situation", []),
+                                            "event_id": event_id
+                                        }
+                                        with open(output_p_filepath, 'w', encoding='utf-8') as f:
+                                            json.dump(reschedule_output, f, ensure_ascii=False, indent=2)
+                                        _logger.info(f"[#{idx+1}] P文件已保存（原始格式）: {output_p_filepath}")
+                                        result_record["output_p_file"] = output_p_filepath
+                                except Exception as p_file_e:
+                                    _logger.error(f"[#{idx+1}] 保存P文件失败: {p_file_e}", exc_info=True)
+                                    result_record["output_p_file"] = None
+                                
+                            except Exception as gantt_e:
+                                _logger.error(f"[#{idx+1}] 生成甘特图失败: {gantt_e}", exc_info=True)
+                        else:
+                            _logger.warning(f"[#{idx+1}] 无法生成甘特图：episodes_situation为空或convert_schedule_with_fixed_logic不可用")
+                        
+                    except Exception as rl_e:
+                        _logger.error(f"[#{idx+1}] 强化学习重调度失败: {rl_e}", exc_info=True)
+                else:
+                    _logger.warning(f"[#{idx+1}] 无法进行强化学习重调度：快照为空或强化学习模块不可用")
+                
+                # 保存结果记录
+                try:
+                    with open(conflict_results_file, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps(result_record, ensure_ascii=False) + "\n")
+                except Exception as e:
+                    _logger.warning(f"[#{idx+1}] 保存结果失败: {e}")
+                
+                continue  # 跳过后续的冲突检测和大模型调度流程
+            
             # 4.4 白名单检查（只有白名单中的事件ID才会触发冲突检测和大模型调度）
             is_in_whitelist = event_id in SCHEDULE_TRIGGER_EVENT_IDS
             
@@ -819,12 +1066,144 @@ def main():
                                             output_p_filename = f"任务三测试场景{scenario_num}_P_{args.team_name}.json"
                                             output_p_filepath = os.path.join(args.output_dir, output_p_filename)
                                             os.makedirs(args.output_dir, exist_ok=True)
-                                            with open(output_p_filepath, 'w', encoding='utf-8') as f:
-                                                json.dump(reschedule_output, f, ensure_ascii=False, indent=2)
-                                            _logger.info(f"[#{idx+1}] P文件已保存: {output_p_filepath}")
-                                            result_record["output_p_file"] = output_p_filepath
+                                            
+                                            # 使用 convert_schedule_with_fixed_logic 生成 plan_eval.json 格式
+                                            if convert_schedule_with_fixed_logic is not None and callable(convert_schedule_with_fixed_logic):
+                                                # 创建临时目录和文件
+                                                temp_dir = os.path.join(args.output_dir, "temp_p_file_generation")
+                                                os.makedirs(temp_dir, exist_ok=True)
+                                                
+                                                temp_evaluate_json = os.path.join(temp_dir, f"temp_evaluate_{event_id:05d}_{timestamp}.json")
+                                                temp_plan_eval_json = os.path.join(temp_dir, f"temp_plan_eval_{event_id:05d}_{timestamp}.json")
+                                                
+                                                try:
+                                                    # 创建临时环境对象以获取 move_job_id
+                                                    if ScheduleEnv is None:
+                                                        raise ImportError("ScheduleEnv 不可用")
+                                                    temp_env_for_converter = ScheduleEnv(rl_args)
+                                                    temp_env_for_converter.reset(rl_args.n_agents)
+                                                    try:
+                                                        move_jid = int(temp_env_for_converter.jobs_obj.code2id().get("ZY_M", 1))
+                                                    except Exception:
+                                                        move_jid = 1
+                                                    
+                                                    # 创建临时的 evaluate.json 文件
+                                                    episodes_situation_for_converter = reschedule_info.get("episodes_situation", [])
+                                                    devices_situation_for_converter = reschedule_info.get("devices_situation", [])
+                                                    temp_evaluate_data = {
+                                                        "schedule_results": [episodes_situation_for_converter],
+                                                        "devices_results": [devices_situation_for_converter] if devices_situation_for_converter else [None],
+                                                        "evaluate_reward": [reschedule_info.get("reward", 0.0)],
+                                                        "evaluate_makespan": [reschedule_info.get("time", 0.0)]
+                                                    }
+                                                    
+                                                    with open(temp_evaluate_json, 'w', encoding='utf-8') as f:
+                                                        json.dump(temp_evaluate_data, f, ensure_ascii=False, indent=2)
+                                                    
+                                                    _logger.debug(f"[#{idx+1}] 已创建临时 evaluate.json: {temp_evaluate_json}")
+                                                    
+                                                    # 创建甘特图输出目录（固定路径：results/task2/gantt）
+                                                    # 使用 args.output_dir 作为基础路径，添加 gantt 子目录
+                                                    gantt_output_dir = os.path.join(args.output_dir, "gantt")
+                                                    os.makedirs(gantt_output_dir, exist_ok=True)
+                                                    _logger.debug(f"[#{idx+1}] 甘特图输出目录: {gantt_output_dir}")
+                                                    
+                                                    # 调用 convert_schedule_with_fixed_logic 生成 plan_eval.json 和甘特图
+                                                    convert_schedule_with_fixed_logic(
+                                                        temp_evaluate_json,
+                                                        temp_plan_eval_json,
+                                                        rl_args.n_agents,
+                                                        out_dir=gantt_output_dir,  # 甘特图保存到专门的目录
+                                                        also_plot=True,  # 生成甘特图
+                                                        move_job_id=move_jid,
+                                                        batch_size_per_batch=None
+                                                    )
+                                                    
+                                                    # 将生成的甘特图文件重命名为包含场景编号的版本
+                                                    original_gantt_png = os.path.join(gantt_output_dir, "gantt.png")
+                                                    original_gantt_stand_usage_png = os.path.join(gantt_output_dir, "gantt_stand_usage.png")
+                                                    
+                                                    gantt_png_path = os.path.join(gantt_output_dir, f"gantt_scenario_{scenario_num}.png")
+                                                    gantt_stand_usage_png_path = os.path.join(gantt_output_dir, f"gantt_stand_usage_scenario_{scenario_num}.png")
+                                                    
+                                                    # 重命名文件（如果原文件存在）
+                                                    try:
+                                                        if os.path.exists(original_gantt_png):
+                                                            if os.path.exists(gantt_png_path):
+                                                                os.remove(gantt_png_path)  # 如果目标文件已存在，先删除
+                                                            os.rename(original_gantt_png, gantt_png_path)
+                                                            _logger.info(f"[#{idx+1}] 甘特图已生成: {gantt_png_path}")
+                                                        else:
+                                                            _logger.warning(f"[#{idx+1}] 甘特图文件不存在: {original_gantt_png}")
+                                                        
+                                                        if os.path.exists(original_gantt_stand_usage_png):
+                                                            if os.path.exists(gantt_stand_usage_png_path):
+                                                                os.remove(gantt_stand_usage_png_path)  # 如果目标文件已存在，先删除
+                                                            os.rename(original_gantt_stand_usage_png, gantt_stand_usage_png_path)
+                                                            _logger.info(f"[#{idx+1}] 停机位使用甘特图已生成: {gantt_stand_usage_png_path}")
+                                                        else:
+                                                            _logger.warning(f"[#{idx+1}] 停机位使用甘特图文件不存在: {original_gantt_stand_usage_png}")
+                                                    except Exception as rename_e:
+                                                        _logger.warning(f"[#{idx+1}] 重命名甘特图文件失败: {rename_e}")
+                                                        # 如果重命名失败，至少记录原始文件路径
+                                                        if os.path.exists(original_gantt_png):
+                                                            _logger.info(f"[#{idx+1}] 甘特图文件（未重命名）: {original_gantt_png}")
+                                                        if os.path.exists(original_gantt_stand_usage_png):
+                                                            _logger.info(f"[#{idx+1}] 停机位使用甘特图文件（未重命名）: {original_gantt_stand_usage_png}")
+                                                    
+                                                    _logger.debug(f"[#{idx+1}] 已生成临时 plan_eval.json: {temp_plan_eval_json}")
+                                                    
+                                                    # 读取生成的 plan_eval.json 内容
+                                                    if os.path.exists(temp_plan_eval_json):
+                                                        with open(temp_plan_eval_json, 'r', encoding='utf-8') as f:
+                                                            plan_eval_data = json.load(f)
+                                                        
+                                                        # 写入到 P 文件
+                                                        with open(output_p_filepath, 'w', encoding='utf-8') as f:
+                                                            json.dump(plan_eval_data, f, ensure_ascii=False, indent=2)
+                                                        
+                                                        _logger.info(f"[#{idx+1}] P文件已保存（plan_eval格式）: {output_p_filepath}")
+                                                        result_record["output_p_file"] = output_p_filepath
+                                                    else:
+                                                        _logger.warning(f"[#{idx+1}] 临时 plan_eval.json 文件不存在，使用原始格式")
+                                                        # 回退到原始格式
+                                                        with open(output_p_filepath, 'w', encoding='utf-8') as f:
+                                                            json.dump(reschedule_output, f, ensure_ascii=False, indent=2)
+                                                        result_record["output_p_file"] = output_p_filepath
+                                                    
+                                                    # 清理临时文件
+                                                    try:
+                                                        if os.path.exists(temp_evaluate_json):
+                                                            os.remove(temp_evaluate_json)
+                                                        if os.path.exists(temp_plan_eval_json):
+                                                            os.remove(temp_plan_eval_json)
+                                                        # 如果临时目录为空，尝试删除它（但可能失败，因为可能有其他文件）
+                                                        try:
+                                                            if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                                                                os.rmdir(temp_dir)
+                                                        except Exception:
+                                                            pass  # 忽略删除目录失败
+                                                        _logger.debug(f"[#{idx+1}] 已清理临时文件")
+                                                    except Exception as cleanup_e:
+                                                        _logger.warning(f"[#{idx+1}] 清理临时文件失败: {cleanup_e}")
+                                                
+                                                except Exception as converter_e:
+                                                    _logger.error(f"[#{idx+1}] 使用 convert_schedule_with_fixed_logic 生成 P 文件失败: {converter_e}", exc_info=True)
+                                                    # 回退到原始格式
+                                                    with open(output_p_filepath, 'w', encoding='utf-8') as f:
+                                                        json.dump(reschedule_output, f, ensure_ascii=False, indent=2)
+                                                    _logger.info(f"[#{idx+1}] P文件已保存（原始格式，转换失败）: {output_p_filepath}")
+                                                    result_record["output_p_file"] = output_p_filepath
+                                            else:
+                                                # convert_schedule_with_fixed_logic 不可用，使用原始格式
+                                                _logger.warning(f"[#{idx+1}] convert_schedule_with_fixed_logic 不可用，使用原始格式")
+                                                with open(output_p_filepath, 'w', encoding='utf-8') as f:
+                                                    json.dump(reschedule_output, f, ensure_ascii=False, indent=2)
+                                                _logger.info(f"[#{idx+1}] P文件已保存（原始格式）: {output_p_filepath}")
+                                                result_record["output_p_file"] = output_p_filepath
+                                        
                                         except Exception as e:
-                                            _logger.warning(f"[#{idx+1}] 保存P文件失败: {e}")
+                                            _logger.warning(f"[#{idx+1}] 保存P文件失败: {e}", exc_info=True)
                                             result_record["output_p_file"] = None
                                     
                                     # 记录调度结果摘要

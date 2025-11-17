@@ -474,10 +474,36 @@ def extract_triples(text: str) -> List[Triple]:
 	# 10.3) 故障恢复：{设备名称}修复完成/恢复；{飞机}{作业}恢复
 	# 示例：供电接口修复完成；飞机A008供电作业恢复
 	#      污水处理装置恢复；飞机A010污水处理作业恢复
-	recovery_pattern = r"((?:供电接口|污水处理装置|供氮终端|清洗装置|供气|供氧阀门|液压软管|液压泵|供氮管路))(修复完成|恢复)[；;]\s*(?:飞机([A-Za-z0-9]+))?([^恢复]*作业)?恢复"
+	#      20号停机位供电接口修复完成；供电作业恢复（支持包含停机位编号的修复事件）
+	#      12号停机位液压软管更换完成；供液压作业恢复
+	#      22号停机位供气压力恢复；加压缩空气作业恢复
+	#      25号停机位液压泵冷却恢复；供液压作业恢复
+	#      28号停机位供氮管路疏通完成；加氮作业恢复
+	# 先匹配包含停机位编号的修复事件（优先级更高）
+	# 支持多种恢复描述：修复完成、恢复、更换完成、冷却恢复、疏通完成、压力恢复等
+	# 注意：设备名称需要支持"供气压力"这种复合名称
+	recovery_pattern_with_stand = r"(\d+)号停机位((?:供电接口|污水处理装置|供氮终端|清洗装置|供气(?:压力)?|供氧阀门|液压软管|液压泵|供氮管路))(修复完成|恢复|更换完成|冷却恢复|疏通完成|压力恢复)[；;]\s*(?:飞机([A-Za-z0-9]+))?([^恢复]*作业)?恢复"
+	for stand_num, device_name, recovery_type, aircraft_id, job_type in re.findall(recovery_pattern_with_stand, text):
+		# 停机位修复（直接生成停机位修复三元组）
+		stand_name = f"停机位{stand_num}"
+		_add(triples, seen, (stand_name, "故障恢复", recovery_type))
+		# 设备恢复（规范化设备名称：将"供气压力"映射为"供气"）
+		device_normalized = device_name
+		if device_normalized == "供气压力":
+			device_normalized = "供气"
+		_add(triples, seen, (device_normalized, "故障恢复", recovery_type))
+		# 如果有飞机信息，添加飞机相关的恢复三元组
+		if aircraft_id:
+			_add(triples, seen, (f"飞机{aircraft_id}", "作业恢复", job_type if job_type else "作业"))
+	
+	# 再匹配不包含停机位编号的修复事件（原有逻辑）
+	# 支持多种恢复描述：修复完成、恢复、更换完成、冷却恢复、疏通完成、压力恢复等
+	recovery_pattern = r"((?:供电接口|污水处理装置|供氮终端|清洗装置|供气(?:压力)?|供氧阀门|液压软管|液压泵|供氮管路))(修复完成|恢复|更换完成|冷却恢复|疏通完成|压力恢复)[；;]\s*(?:飞机([A-Za-z0-9]+))?([^恢复]*作业)?恢复"
 	for device_name, recovery_type, aircraft_id, job_type in re.findall(recovery_pattern, text):
-		# 设备恢复
-		device_normalized = device_name  # 可能需要进一步规范化
+		# 设备恢复（规范化设备名称：将"供气压力"映射为"供气"）
+		device_normalized = device_name
+		if device_normalized == "供气压力":
+			device_normalized = "供气"
 		_add(triples, seen, (device_normalized, "故障恢复", recovery_type))
 		# 如果有飞机信息，添加飞机相关的恢复三元组
 		if aircraft_id:

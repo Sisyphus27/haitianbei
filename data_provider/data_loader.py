@@ -289,6 +289,7 @@ class Dataset_KG(Dataset):
         resource_from_jobs = {res for job in jobs_spec.jobs_object_list for res in job.required_resources}
         resource_from_fr = {spec[0] for spec in self._FIXED_DEVICE_LAYOUT.values()}
         all_resources = sorted(resource_from_jobs | resource_from_fr)
+        _logger.debug(f"[INIT] 开始初始化静态图谱，资源数量: {len(all_resources)}")
 
         with self.driver.session(database=self.neo4j_database) as sess:
             # --- 跑道/停机位链 ---
@@ -298,12 +299,13 @@ class Dataset_KG(Dataset):
                     f"MERGE (n:{label} {{name:$name}}) SET n.isFixed = true",  # type: ignore[arg-type]
                     {"name": node_name},
                 )
-                # 跑道/停机位 设初始占用/预占用标志（布尔），默认为未占用/未预占，并添加isDamaged属性
+                # 跑道/停机位 设初始占用/预占用标志（布尔），默认为未占用/未预占，并添加isDamaged、failureTime、failureDescription属性
                 if label in {self.Runway, self.Gate}:
                     sess.run(
-                        f"MATCH (n:{label} {{name:$name}}) SET n.isOccupied = false, n.isReserved = false, n.isDamaged = false",  # type: ignore[arg-type]
+                        f"MATCH (n:{label} {{name:$name}}) SET n.isOccupied = false, n.isReserved = false, n.isDamaged = false, n.failureTime = null, n.failureDuration = null, n.failureDescription = null",  # type: ignore[arg-type]
                         {"name": node_name},
                     )
+                    _logger.debug(f"[INIT] {label} {node_name}: 初始化属性 (isFixed=true, isOccupied=false, isReserved=false, isDamaged=false, failureTime=null, failureDuration=null, failureDescription=null)")
 
             for src, dst in zip(self._STAND_CHAIN, self._STAND_CHAIN[1:]):
                 src_label = self._class_for_entity(src) or "Entity"
@@ -318,9 +320,10 @@ class Dataset_KG(Dataset):
             # --- 资源与作业（图2：作业->固定设备->支持停机位）---
             for res in all_resources:
                 sess.run(
-                    "MERGE (r:Resource {name:$name}) SET r.isFixed = true, r.isReserved = false, r.isDamaged = false",  # type: ignore[arg-type]
+                    "MERGE (r:Resource {name:$name}) SET r.isFixed = true, r.isReserved = false, r.isDamaged = false, r.failureTime = null, r.failureDuration = null, r.failureDescription = null",  # type: ignore[arg-type]
                     {"name": res},
                 )
+                _logger.debug(f"[INIT] Resource {res}: 初始化属性 (isFixed=true, isReserved=false, isDamaged=false, failureTime=null, failureDuration=null, failureDescription=null)")
 
             for job in jobs_spec.jobs_object_list:
                 sess.run(
@@ -346,13 +349,14 @@ class Dataset_KG(Dataset):
                 stand_names = [f"停机位{sid}" for sid in stand_ids]
                 sess.run(
                     "MERGE (d:Device:FixedDevice {name:$name}) "
-                    "SET d.resource = $resource, d.coverage = $coverage, d.isFixed = true, d.isOccupied = false, d.isReserved = false, d.isDamaged = false",  # type: ignore[arg-type]
+                    "SET d.resource = $resource, d.coverage = $coverage, d.isFixed = true, d.isOccupied = false, d.isReserved = false, d.isDamaged = false, d.failureTime = null, d.failureDuration = null, d.failureDescription = null",  # type: ignore[arg-type]
                     {
                         "name": device_name,
                         "resource": resource_code,
                         "coverage": stand_names,
                     },
                 )
+                _logger.debug(f"[INIT] FixedDevice {device_name}: 初始化属性 (resource={resource_code}, coverage={len(stand_names)}个停机位, isFixed=true, isOccupied=false, isReserved=false, isDamaged=false, failureTime=null, failureDuration=null, failureDescription=null)")
 
                 sess.run(
                     "MATCH (d:FixedDevice {name:$device}) MATCH (r:Resource {name:$resource}) "
@@ -390,13 +394,14 @@ class Dataset_KG(Dataset):
                 sess.run(
                     "MERGE (d:Device:MobileDevice {name:$name}) "
                     "SET d.resource = $resource, d.initialStand = $initialStand, "
-                    "d.isFixed = true, d.isOccupied = false, d.isReserved = false, d.isDamaged = false",  # type: ignore[arg-type]
+                    "d.isFixed = true, d.isOccupied = false, d.isReserved = false, d.isDamaged = false, d.failureTime = null, d.failureDuration = null, d.failureDescription = null",  # type: ignore[arg-type]
                     {
                         "name": device_name,
                         "resource": resource_code,
                         "initialStand": initial_stand_name,
                     },
                 )
+                _logger.debug(f"[INIT] MobileDevice {device_name}: 初始化属性 (resource={resource_code}, initialStand={initial_stand_name}, isFixed=true, isOccupied=false, isReserved=false, isDamaged=false, failureTime=null, failureDuration=null, failureDescription=null)")
                 
                 # 建立与资源的关系
                 sess.run(
@@ -1422,19 +1427,31 @@ class Dataset_KG(Dataset):
                             break
                     
                     # 更新停机位的isDamaged状态
+                    # 设备故障通常没有明确的持续时间，使用默认值60分钟
+                    # 如果后续有修复事件，修复事件会清除这些属性
+                    # 注意：只有在事件有明确时间信息时才设置损坏状态
+                    if current_time_min is None:
+                        _logger.warning(f"[DAMAGE] 警告：设备故障事件缺少时间信息，跳过设置停机位 {stand_norm} 的损坏状态")
+                        continue
+                    
+                    failure_time = current_time_min
+                    default_duration = 60.0  # 默认持续时间60分钟
                     sess.run(
                         """
                         MATCH (s:Stand {name:$stand})
                         SET s.isDamaged = true,
                             s.failureTime = $time,
+                            s.failureDuration = $duration,
                             s.failureDescription = $desc
                         """,
                         {
                             "stand": stand_norm,
-                            "time": current_time_min if current_time_min is not None else 0.0,
+                            "time": failure_time,
+                            "duration": default_duration,
                             "desc": f"{device_name}{failure_type if failure_type else '故障'}"
                         }
                     )
+                    _logger.info(f"[DAMAGE] 停机位 {stand_norm} 因设备故障标记为损坏（故障时间: {failure_time:.2f}分钟，默认持续时间: {default_duration:.2f}分钟）")
                     
                     # 尝试找到对应的设备节点并更新状态
                     # 设备名称可能是中文描述，需要尝试匹配到FR设备
@@ -1452,19 +1469,29 @@ class Dataset_KG(Dataset):
                     
                     # 如果设备名称是FR/MR格式，直接更新
                     if re.fullmatch(r"FR\d{1,3}|MR\d{2}", device_norm):
+                        # 注意：只有在事件有明确时间信息时才设置损坏状态
+                        if current_time_min is None:
+                            _logger.warning(f"[DAMAGE] 警告：设备故障事件缺少时间信息，跳过设置设备 {device_norm} 的损坏状态")
+                            continue
+                        
+                        failure_time = current_time_min
+                        default_duration = 60.0  # 默认持续时间60分钟
                         sess.run(
                             """
                             MATCH (d:Device {name:$dev})
                             SET d.isDamaged = true,
                                 d.failureTime = $time,
+                                d.failureDuration = $duration,
                                 d.failureDescription = $desc
                             """,
                             {
                                 "dev": device_norm,
-                                "time": current_time_min if current_time_min is not None else 0.0,
+                                "time": failure_time,
+                                "duration": default_duration,
                                 "desc": f"{failure_type if failure_type else '故障'}"
                             }
                         )
+                        _logger.info(f"[DAMAGE] 设备 {device_norm} 标记为损坏（故障时间: {failure_time:.2f}分钟，默认持续时间: {default_duration:.2f}分钟）")
                         device_found = True
             except Exception as e:
                 _logger.warning(f"处理设备故障时出错: {e}")
@@ -1472,6 +1499,8 @@ class Dataset_KG(Dataset):
         
         # 9.3) 处理停机位故障：从三元组中识别 (停机位X, 停机位故障, 持续时间)
         stand_failure_triples = [(s, p, o) for s, p, o in triples if p == "停机位故障"]
+        if stand_failure_triples:
+            _logger.debug(f"[DAMAGE] 检测到 {len(stand_failure_triples)} 个停机位故障三元组: {stand_failure_triples}")
         # 检查是否是"下一架降落飞机"的特殊故障事件
         is_next_aircraft_failure = re.search(r"下一架降落飞机", text) is not None
         
@@ -1481,6 +1510,12 @@ class Dataset_KG(Dataset):
                     stand_norm = self._canon_entity(stand_name)
                     duration_min = float(duration_str) if duration_str.isdigit() else 0.0
                     
+                    # 注意：只有在事件有明确时间信息时才设置损坏状态
+                    if current_time_min is None:
+                        _logger.warning(f"[DAMAGE] 警告：停机位故障事件缺少时间信息，跳过设置停机位 {stand_norm} 的损坏状态")
+                        continue
+                    
+                    failure_time = current_time_min
                     sess.run(
                         """
                         MATCH (s:Stand {name:$stand})
@@ -1490,10 +1525,11 @@ class Dataset_KG(Dataset):
                         """,
                         {
                             "stand": stand_norm,
-                            "time": current_time_min if current_time_min is not None else 0.0,
+                            "time": failure_time,
                             "duration": duration_min
                         }
                     )
+                    _logger.info(f"[DAMAGE] 停机位 {stand_norm} 标记为损坏（故障时间: {failure_time:.2f}分钟，持续时间: {duration_min:.2f}分钟）")
                     
                     # 如果是"下一架降落飞机"的特殊故障，尝试查找正在着陆或即将着陆的飞机
                     if is_next_aircraft_failure:
@@ -1530,6 +1566,66 @@ class Dataset_KG(Dataset):
         # 9.4) 处理故障恢复：从三元组中识别 (设备名称, 故障恢复, 恢复类型) 和 (飞机X, 作业恢复, 作业类型)
         recovery_triples = [(s, p, o) for s, p, o in triples if p == "故障恢复"]
         job_recovery_triples = [(s, p, o) for s, p, o in triples if p == "作业恢复"]
+        if recovery_triples:
+            _logger.debug(f"[REPAIR] 检测到 {len(recovery_triples)} 个故障恢复三元组: {recovery_triples}")
+        if job_recovery_triples:
+            _logger.debug(f"[REPAIR] 检测到 {len(job_recovery_triples)} 个作业恢复三元组: {job_recovery_triples}")
+        
+        # 9.4.0) 优先处理停机位修复三元组（如"停机位20", "故障恢复", "修复完成"）
+        # 注意：修复事件优先级低于损坏事件（如果有failureTime和failureDuration，说明是持续损坏）
+        # 但如果修复时间 >= 损坏时间，应该清除损坏状态
+        stand_recovery_triples = [(s, p, o) for s, p, o in recovery_triples if s.startswith("停机位")]
+        for stand_name, _, recovery_type in stand_recovery_triples:
+            try:
+                with self.driver.session(database=self.neo4j_database) as sess:
+                    stand_norm = self._canon_entity(stand_name)
+                    # 先查询停机位的损坏状态和时间信息
+                    stand_info = sess.run(
+                        """
+                        MATCH (s:Stand {name:$stand})
+                        RETURN s.isDamaged AS is_damaged,
+                               s.failureTime AS failure_time,
+                               s.failureDuration AS failure_duration
+                        """,
+                        {"stand": stand_norm}
+                    ).single()
+                    
+                    if stand_info:
+                        is_damaged = stand_info.get("is_damaged", False)
+                        failure_time = stand_info.get("failure_time")
+                        failure_duration = stand_info.get("failure_duration")
+                        
+                        # 检查时间一致性：如果修复时间 < 损坏时间，记录警告
+                        if is_damaged and failure_time is not None and current_time_min is not None:
+                            if current_time_min < failure_time:
+                                _logger.warning(f"[REPAIR] 警告：停机位 {stand_norm} 修复时间 ({current_time_min:.2f}分钟) < 损坏时间 ({failure_time:.2f}分钟)，可能存在时间顺序问题")
+                            # 检查是否在损坏持续时间内
+                            if failure_duration is not None:
+                                end_time = failure_time + failure_duration
+                                if current_time_min > end_time:
+                                    _logger.debug(f"[REPAIR] 停机位 {stand_norm} 修复时间 ({current_time_min:.2f}分钟) > 损坏结束时间 ({end_time:.2f}分钟)，损坏已过期")
+                    
+                    # 直接修复停机位（清除损坏状态）
+                    result = sess.run(
+                        """
+                        MATCH (s:Stand {name:$stand})
+                        WHERE s.isDamaged = true
+                        SET s.isDamaged = false,
+                            s.failureTime = null,
+                            s.failureDuration = null,
+                            s.failureDescription = null
+                        RETURN s.name AS name, s.isDamaged AS is_damaged
+                        """,
+                        {"stand": stand_norm}
+                    ).single()
+                    if result:
+                        _logger.info(f"[REPAIR] 停机位 {stand_norm} 已修复（故障恢复三元组，修复时间: {current_time_min:.2f}分钟）")
+                    else:
+                        # 停机位可能不存在或未被损坏
+                        _logger.debug(f"[REPAIR] 停机位 {stand_norm} 未找到或未被损坏，跳过修复")
+            except Exception as e:
+                _logger.warning(f"处理停机位修复时出错: {e}")
+                pass
         
         # 从作业恢复推断设备和停机位
         for ac_name, _, job_type in job_recovery_triples:
@@ -1597,7 +1693,7 @@ class Dataset_KG(Dataset):
                                     
                                     # 如果停机位本身有故障，也恢复停机位
                                     if stand_norm:
-                                        sess.run(
+                                        repair_result = sess.run(
                                             """
                                             MATCH (s:Stand {name:$stand})
                                             WHERE s.isDamaged = true
@@ -1605,9 +1701,14 @@ class Dataset_KG(Dataset):
                                                 s.failureTime = null,
                                                 s.failureDuration = null,
                                                 s.failureDescription = null
+                                            RETURN s.name AS name, s.isDamaged AS is_damaged
                                             """,
                                             {"stand": stand_norm}
-                                        )
+                                        ).single()
+                                        if repair_result:
+                                            _logger.info(f"[REPAIR] 停机位 {stand_norm} 已修复（从作业恢复推断）")
+                                        else:
+                                            _logger.debug(f"[REPAIR] 停机位 {stand_norm} 未找到或未被损坏，跳过修复")
             except Exception as e:
                 _logger.warning(f"处理故障恢复时出错: {e}")
                 pass
@@ -1650,7 +1751,7 @@ class Dataset_KG(Dataset):
                     if stand_match:
                         stand_num = stand_match.group(1)
                         stand_name = f"停机位{stand_num}"
-                        sess.run(
+                        repair_result = sess.run(
                             """
                             MATCH (s:Stand {name:$stand})
                             WHERE s.isDamaged = true
@@ -1658,9 +1759,14 @@ class Dataset_KG(Dataset):
                                 s.failureTime = null,
                                 s.failureDuration = null,
                                 s.failureDescription = null
+                            RETURN s.name AS name, s.isDamaged AS is_damaged
                             """,
                             {"stand": stand_name}
-                        )
+                        ).single()
+                        if repair_result:
+                            _logger.info(f"[REPAIR] 停机位 {stand_name} 已修复（从设备恢复推断）")
+                        else:
+                            _logger.debug(f"[REPAIR] 停机位 {stand_name} 未找到或未被损坏，跳过修复")
             except Exception as e:
                 _logger.warning(f"处理设备恢复时出错: {e}")
                 pass
